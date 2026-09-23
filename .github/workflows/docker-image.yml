@@ -6,7 +6,7 @@ on:
   pull_request:
     branches: [ "main" ]
 env:
-  IMAGE_NAME: ghazi4009/C2
+  IMAGE_NAME: ghazi4009/c2
   CONTAINER_NAME: C2
 
 jobs:
@@ -36,6 +36,6 @@ jobs:
         push: true
 
         tags: |
-          ${{ secrets.DOCKER_USERNAME }}/C2:latest
-          ${{ secrets.DOCKER_USERNAME }}/C2:${{ github.sha }}
+          ${{ secrets.DOCKER_USERNAME }}/c2:latest
+          ${{ secrets.DOCKER_USERNAME }}/c2:${{ github.sha }}
 
