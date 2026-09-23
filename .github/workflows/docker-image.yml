@@ -2,9 +2,9 @@ name: Build Push and Deploy Image
 
 on:
   push:
-    branches: [ "master" ]
+    branches: [ "main" ]
   pull_request:
-    branches: [ "master" ]
+    branches: [ "main" ]
 env:
   IMAGE_NAME: ghazi4009/C2
   CONTAINER_NAME: C2
