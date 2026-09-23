@@ -4,7 +4,7 @@
 # Stage 2 : Production image (Node.js + Ansible + Terraform)
 # ============================================================
 
-# ── Stage 1: Builder ────────────────────────────────────────
+# ── Stage 1: Builderr ────────────────────────────────────────
 FROM node:22-bookworm-slim AS builder
 
 WORKDIR /app
