@@ -11,6 +11,11 @@ WORKDIR /app
 
 # Copy package manifests and install ALL dependencies (including devDeps for build)
 COPY package.json package-lock.json ./
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 \
+    make \
+    g++ \
+    && rm -rf /var/lib/apt/lists/*
 RUN npm ci
 
 # Copy the full source and build the frontend
@@ -71,6 +76,7 @@ RUN mkdir -p /app/data
 
 # ---- Environment defaults ----
 ENV NODE_ENV=production \
+    HOST=0.0.0.0 \
     PORT=5000 \
     CORS_ORIGIN=*
 

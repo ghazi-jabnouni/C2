@@ -144,12 +144,12 @@ console.log('Port:', config.port);
 console.log('Environment:', config.env);
 console.log('========================================');
 
-const server = app.listen(config.port, () => {
+const server = app.listen(config.port, config.host, () => {
   console.log('========================================');
   console.log('🚀 Backend Express Server is RUNNING');
-  console.log(`🌐 http://localhost:${config.port}`);
-  console.log(`❤️  Health: http://localhost:${config.port}/api/health`);
-  console.log(`👤 Users: http://localhost:${config.port}/api/users`);
+  console.log(`🌐 http://${config.host}:${config.port}`);
+  console.log(`❤️  Health: http://${config.host}:${config.port}/api/health`);
+  console.log(`👤 Users: http://${config.host}:${config.port}/api/users`);
   console.log('========================================');
 });
 
