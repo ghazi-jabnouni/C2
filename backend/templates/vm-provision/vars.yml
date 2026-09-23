@@ -1,0 +1,4 @@
+# Extra Variables for vm provision
+ag_name: "AG_PROD"
+failover_type: "planned"
+online_rebuild: true

@@ -1,0 +1,6 @@
+[webservers]
+web-01.company.internal ansible_host=10.0.1.11
+web-02.company.internal ansible_host=10.0.1.12
+
+[databases]
+db-master.company.internal ansible_host=10.0.1.50

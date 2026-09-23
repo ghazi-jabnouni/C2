@@ -1,0 +1,25 @@
+[postgres_cluster]
+pg-master-01.us-east.company.internal ansible_host=10.0.1.50
+pg-replica-01.us-east.company.internal ansible_host=10.0.1.51
+pg-replica-02.eu-west.company.internal ansible_host=10.0.2.51
+
+[mssql_availability_group]
+mssql-node-01.company.internal ansible_host=10.0.3.10
+mssql-node-02.company.internal ansible_host=10.0.3.11
+
+[oracle_rac_nodes]
+ora-rac-node-01.company.internal ansible_host=10.0.4.20
+ora-rac-node-02.company.internal ansible_host=10.0.4.21
+
+[mysql_galera_cluster]
+mysql-node-01.company.internal ansible_host=10.0.5.30
+mysql-node-02.company.internal ansible_host=10.0.5.31
+mysql-node-03.company.internal ansible_host=10.0.5.32
+
+[redis_sentinel]
+redis-01.company.internal ansible_host=10.0.6.40
+redis-02.company.internal ansible_host=10.0.6.41
+
+[mongodb_replicaset]
+mongo-01.company.internal ansible_host=10.0.7.50
+mongo-02.company.internal ansible_host=10.0.7.51

@@ -1,0 +1,677 @@
+{
+  "repositories": [
+    {
+      "id": "repo-1",
+      "name": "ansible-database-orchestration",
+      "gitUrl": "https://github.com/enterprise-ops/ansible-database-orchestration.git",
+      "branch": "main",
+      "credentialId": "cred-1",
+      "lastSync": "2026-08-15T20:53:07.825Z",
+      "status": "synced",
+      "playbooks": [
+        "playbooks/postgres_cluster_ha.yml",
+        "playbooks/postgres_wal_backup.yml",
+        "playbooks/mssql_alwayson_failover.yml",
+        "playbooks/mssql_index_maintenance.yml",
+        "playbooks/oracle_rac_dataguard.yml",
+        "playbooks/oracle_rman_backup.yml",
+        "playbooks/mysql_xtrabackup_cluster.yml",
+        "playbooks/mysql_schema_migration.yml",
+        "playbooks/redis_cluster_sharding.yml",
+        "playbooks/mongodb_replicaset_backup.yml"
+      ]
+    },
+    {
+      "id": "repo-2",
+      "name": "ansible-infrastructure-core",
+      "gitUrl": "https://github.com/enterprise-ops/ansible-infrastructure-core.git",
+      "branch": "production",
+      "credentialId": "cred-2",
+      "lastSync": "2026-08-15T20:53:09.072Z",
+      "status": "synced",
+      "playbooks": [
+        "playbooks/web_cluster_deploy.yml",
+        "playbooks/security_patching.yml",
+        "playbooks/nginx_ssl_renew.yml",
+        "playbooks/k8s_node_bootstrap.yml"
+      ]
+    }
+  ],
+  "credentials": [
+    {
+      "id": "cred-1",
+      "name": "Database DBA Superuser Vault",
+      "type": "vault_password",
+      "username": "dba_admin",
+      "vaultPassword": "••••••••••••••••",
+      "sudoPassword": "••••••••••••••••",
+      "createdAt": "2026-01-10T10:00:00.000Z"
+    },
+    {
+      "id": "cred-2",
+      "name": "Production Root SSH Key",
+      "type": "ssh_key",
+      "username": "ubuntu",
+      "sshKey": "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW\nQyNTUxOQAAACBA8zP...[SECURE_DBA_VAULT_KEY]...kM2P5z3q=\n-----END OPENSSH PRIVATE KEY-----",
+      "passphrase": "",
+      "createdAt": "2026-02-14T11:20:00.000Z"
+    },
+    {
+      "id": "cred-3",
+      "name": "AWS Production S3 DB Backup IAM",
+      "type": "cloud_token",
+      "username": "AKIAEXAMPLEDBBACKUPKEY",
+      "secretToken": "••••••••••••••••••••••••••••••••••••••••",
+      "createdAt": "2026-03-01T08:45:00.000Z"
+    }
+  ],
+  "inventories": [
+    {
+      "id": "inv-1",
+      "name": "Production Enterprise DB Cluster",
+      "type": "static",
+      "fileName": "production-enterprise-db-cluster-inv-1.yml",
+      "filePath": "backend/inventories/production-enterprise-db-cluster-inv-1.yml",
+      "hostCount": 16,
+      "inventoryContent": "[postgres_cluster]\npg-master-01.us-east.company.internal ansible_host=10.0.1.50\npg-replica-01.us-east.company.internal ansible_host=10.0.1.51\npg-replica-02.eu-west.company.internal ansible_host=10.0.2.51\n\n[mssql_availability_group]\nmssql-node-01.company.internal ansible_host=10.0.3.10\nmssql-node-02.company.internal ansible_host=10.0.3.11\n\n[oracle_rac_nodes]\nora-rac-node-01.company.internal ansible_host=10.0.4.20\nora-rac-node-02.company.internal ansible_host=10.0.4.21\n\n[mysql_galera_cluster]\nmysql-node-01.company.internal ansible_host=10.0.5.30\nmysql-node-02.company.internal ansible_host=10.0.5.31\nmysql-node-03.company.internal ansible_host=10.0.5.32\n\n[redis_sentinel]\nredis-01.company.internal ansible_host=10.0.6.40\nredis-02.company.internal ansible_host=10.0.6.41\n\n[mongodb_replicaset]\nmongo-01.company.internal ansible_host=10.0.7.50\nmongo-02.company.internal ansible_host=10.0.7.51",
+      "updatedAt": "2026-08-15T14:30:00.000Z"
+    },
+    {
+      "id": "inv-2",
+      "name": "Staging & Dev DB Sandbox",
+      "type": "static",
+      "fileName": "staging-dev-db-sandbox-inv-2.yml",
+      "filePath": "backend/inventories/staging-dev-db-sandbox-inv-2.yml",
+      "hostCount": 3,
+      "inventoryContent": "[dev_databases]\ndev-pg-01.internal ansible_host=10.20.1.20\ndev-mysql-01.internal ansible_host=10.20.1.21\ndev-mssql-01.internal ansible_host=10.20.1.22",
+      "updatedAt": "2026-08-14T09:15:00.000Z"
+    }
+  ],
+  "environments": [
+    {
+      "id": "env-1",
+      "name": "Production Database Secrets & Config",
+      "variables": {
+        "BACKUP_RETENTION_DAYS": "90",
+        "POSTGRES_MAX_CONNECTIONS": "500",
+        "MSSQL_MAX_SERVER_MEMORY_MB": "65536",
+        "ORACLE_SGA_TARGET": "32G",
+        "MYSQL_INNODB_BUFFER_POOL_SIZE": "24G"
+      },
+      "secrets": {
+        "DB_MASTER_ENCRYPTION_KEY": "s3cr3t_pr0d_db_k3y_vault",
+        "S3_BACKUP_ENCRYPTION_PASSPHRASE": "enc_backup_pass_9921"
+      },
+      "updatedAt": "2026-08-10T12:00:00.000Z"
+    }
+  ],
+  "templates": [
+    {
+      "id": "tmpl-pg-1",
+      "name": "PostgreSQL 16: Automated WAL Archive & Backup Snapshot",
+      "description": "Executes pg_basebackup with continuous WAL streaming, verifies checksums, and uploads zstd compressed archive to S3 bucket.",
+      "dbType": "postgresql",
+      "repositoryId": "repo-1",
+      "playbook": "playbooks/postgres_wal_backup.yml",
+      "inventoryId": "inv-1",
+      "credentialId": "cred-1",
+      "environmentId": "env-1",
+      "extraVars": "{\"backup_type\": \"full\", \"compression\": \"zstd\", \"verify_checksum\": true, \"retention_days\": 60}",
+      "limit": "postgres_cluster",
+      "tags": "postgres,backup,wal",
+      "allowCliArgs": true,
+      "totalRuns": 35,
+      "lastRunStatus": "success",
+      "lastRunAt": "2026-08-15T20:40:49.292Z"
+    },
+    {
+      "id": "tmpl-pg-2",
+      "name": "PostgreSQL: Auto-Vacuum & Table Bloat Compaction",
+      "description": "Performs scheduled multi-threaded VACUUM ANALYZE across heavily updated transaction tables, reindexes fragmented indexes.",
+      "dbType": "postgresql",
+      "repositoryId": "repo-1",
+      "playbook": "playbooks/postgres_cluster_ha.yml",
+      "inventoryId": "inv-1",
+      "credentialId": "cred-1",
+      "environmentId": "env-1",
+      "extraVars": "{\"vacuum_mode\": \"freeze\", \"max_parallel_workers\": 4}",
+      "limit": "postgres_cluster",
+      "tags": "postgres,maintenance",
+      "allowCliArgs": false,
+      "totalRuns": 12,
+      "lastRunStatus": "success",
+      "lastRunAt": "2026-08-14T03:00:00.000Z"
+    },
+    {
+      "id": "tmpl-mssql-1",
+      "name": "MSSQL: AlwaysOn Availability Group Failover & Sync Verification",
+      "description": "Automates zero-data-loss graceful failover between SQL Server 2022 AG replicas, validates listener endpoints and quorum health.",
+      "dbType": "mssql",
+      "repositoryId": "repo-1",
+      "playbook": "playbooks/mssql_alwayson_failover.yml",
+      "inventoryId": "inv-1",
+      "credentialId": "cred-1",
+      "environmentId": "env-1",
+      "extraVars": "{\"ag_name\": \"AG_PROD\", \"target_node\": \"mssql-node-02\", \"failover_type\": \"planned\"}",
+      "limit": "mssql_availability_group",
+      "tags": "mssql,failover,alwayson",
+      "allowCliArgs": true,
+      "totalRuns": 8,
+      "lastRunStatus": "success",
+      "lastRunAt": "2026-08-15T20:50:10.575Z"
+    },
+    {
+      "id": "tmpl-mssql-2",
+      "name": "MSSQL: Index Defragmentation & Transaction Log Shrink",
+      "description": "Rebuilds fragmented clustered/non-clustered indexes with fragmentation > 30%, reorganizes indexes between 10%-30%, and clears log queues.",
+      "dbType": "mssql",
+      "repositoryId": "repo-1",
+      "playbook": "playbooks/mssql_index_maintenance.yml",
+      "inventoryId": "inv-1",
+      "credentialId": "cred-1",
+      "environmentId": "env-1",
+      "extraVars": "{\"max_duration_minutes\": 120, \"online_rebuild\": true}",
+      "limit": "mssql_availability_group",
+      "tags": "mssql,index,maintenance",
+      "allowCliArgs": false,
+      "totalRuns": 21,
+      "lastRunStatus": "success",
+      "lastRunAt": "2026-08-12T01:00:00.000Z"
+    },
+    {
+      "id": "tmpl-oracle-1",
+      "name": "Oracle 19c RAC: Data Guard Sync & Fast-Start Failover Health",
+      "description": "Queries V$DATAGUARD_STATS, validates transport lag, reconciles redo log gaps between primary RAC cluster and standby DR site.",
+      "dbType": "oracle",
+      "repositoryId": "repo-1",
+      "playbook": "playbooks/oracle_rac_dataguard.yml",
+      "inventoryId": "inv-1",
+      "credentialId": "cred-1",
+      "environmentId": "env-1",
+      "extraVars": "{\"max_allowed_lag_seconds\": 30, \"check_archive_dest\": true}",
+      "limit": "oracle_rac_nodes",
+      "tags": "oracle,dataguard,rac",
+      "allowCliArgs": false,
+      "totalRuns": 19,
+      "lastRunStatus": "success",
+      "lastRunAt": "2026-08-15T11:00:00.000Z"
+    },
+    {
+      "id": "tmpl-oracle-2",
+      "name": "Oracle: RMAN Hot Database Full Backup with Compression",
+      "description": "Initiates multi-channel Oracle Recovery Manager (RMAN) hot backup, multiplexes control files and archivelogs with encryption.",
+      "dbType": "oracle",
+      "repositoryId": "repo-1",
+      "playbook": "playbooks/oracle_rman_backup.yml",
+      "inventoryId": "inv-1",
+      "credentialId": "cred-1",
+      "environmentId": "env-1",
+      "extraVars": "{\"channels\": 4, \"backup_type\": \"full_database\", \"compress\": \"high\"}",
+      "limit": "oracle_rac_nodes",
+      "tags": "oracle,rman,backup",
+      "allowCliArgs": true,
+      "totalRuns": 29,
+      "lastRunStatus": "success",
+      "lastRunAt": "2026-08-15T02:30:00.000Z"
+    },
+    {
+      "id": "tmpl-mysql-1",
+      "name": "MySQL 8.4: Percona XtraBackup Hot Online Backup",
+      "description": "Executes non-blocking physical MySQL cluster hot backup, prepares redo logs, and streams encrypted archive to storage gateway.",
+      "dbType": "mysql",
+      "repositoryId": "repo-1",
+      "playbook": "playbooks/mysql_xtrabackup_cluster.yml",
+      "inventoryId": "inv-1",
+      "credentialId": "cred-1",
+      "environmentId": "env-1",
+      "extraVars": "{\"parallel\": 4, \"compress\": \"lz4\", \"stream\": \"xbstream\"}",
+      "limit": "mysql_galera_cluster",
+      "tags": "mysql,xtrabackup,backup",
+      "allowCliArgs": true,
+      "totalRuns": 27,
+      "lastRunStatus": "success",
+      "lastRunAt": "2026-08-15T04:00:00.000Z"
+    },
+    {
+      "id": "tmpl-mysql-2",
+      "name": "MySQL: Zero-Downtime Online Schema Change (gh-ost)",
+      "description": "Performs triggerless asynchronous schema migrations across production Galera / InnoDB tables with throttle throttling control.",
+      "dbType": "mysql",
+      "repositoryId": "repo-1",
+      "playbook": "playbooks/mysql_schema_migration.yml",
+      "inventoryId": "inv-1",
+      "credentialId": "cred-1",
+      "environmentId": "env-1",
+      "extraVars": "{\"table_name\": \"orders\", \"alter_statement\": \"ADD INDEX idx_customer_created (customer_id, created_at)\", \"max_lag_ms\": 500}",
+      "limit": "mysql_galera_cluster",
+      "tags": "mysql,ghost,migration",
+      "allowCliArgs": true,
+      "totalRuns": 6,
+      "lastRunStatus": "success",
+      "lastRunAt": "2026-08-11T14:10:00.000Z"
+    },
+    {
+      "id": "tmpl-redis-1",
+      "name": "Redis: Cluster Node Sharding & Memory Rebalance",
+      "description": "Rebalances Redis slot allocations across cluster master shards, manages memory fragmentation ratio and eviction policies.",
+      "dbType": "redis",
+      "repositoryId": "repo-1",
+      "playbook": "playbooks/redis_cluster_sharding.yml",
+      "inventoryId": "inv-1",
+      "credentialId": "cred-2",
+      "environmentId": "env-1",
+      "extraVars": "{\"max_memory_policy\": \"volatile-lru\", \"save_snapshot\": true}",
+      "limit": "redis_sentinel",
+      "tags": "redis,cache,cluster",
+      "allowCliArgs": true,
+      "totalRuns": 14,
+      "lastRunStatus": "success",
+      "lastRunAt": "2026-08-10T19:00:00.000Z"
+    },
+    {
+      "id": "tmpl-mongo-1",
+      "name": "MongoDB: ReplicaSet Oplog Window & Shard Backup",
+      "description": "Captures point-in-time mongodump with oplog replication stream, verifies primary arbiter votes and index health.",
+      "dbType": "mongodb",
+      "repositoryId": "repo-1",
+      "playbook": "playbooks/mongodb_replicaset_backup.yml",
+      "inventoryId": "inv-1",
+      "credentialId": "cred-2",
+      "environmentId": "env-1",
+      "extraVars": "{\"gzip\": true, \"oplog\": true, \"dump_target\": \"s3\"}",
+      "limit": "mongodb_replicaset",
+      "tags": "mongodb,nosql,backup",
+      "allowCliArgs": true,
+      "totalRuns": 11,
+      "lastRunStatus": "success",
+      "lastRunAt": "2026-08-14T02:00:00.000Z"
+    },
+    {
+      "id": "tmpl-infra-1",
+      "name": "Core Infrastructure: Security Patching & Kernel Update",
+      "description": "Applies OS CVE patches, manages reboot sequencing gracefully with cluster health check verification.",
+      "dbType": "infrastructure",
+      "repositoryId": "repo-2",
+      "playbook": "playbooks/security_patching.yml",
+      "inventoryId": "inv-1",
+      "credentialId": "cred-2",
+      "environmentId": "env-1",
+      "extraVars": "{\"reboot_if_needed\": true, \"max_concurrent\": 2}",
+      "limit": "all",
+      "tags": "security,apt,kernel",
+      "allowCliArgs": false,
+      "totalRuns": 15,
+      "lastRunStatus": "success",
+      "lastRunAt": "2026-08-15T03:00:00.000Z"
+    }
+  ],
+  "tasks": [
+    {
+      "id": "task-pg-101",
+      "templateId": "tmpl-pg-1",
+      "templateName": "PostgreSQL 16: Automated WAL Archive & Backup Snapshot",
+      "status": "success",
+      "startedAt": "2026-08-15T19:48:10.000Z",
+      "finishedAt": "2026-08-15T19:50:22.000Z",
+      "duration": "2m 12s",
+      "triggeredBy": "dba_admin@company.io",
+      "inventoryName": "Production Enterprise DB Cluster",
+      "playbook": "playbooks/postgres_wal_backup.yml",
+      "hostsStats": {
+        "ok": 18,
+        "changed": 6,
+        "unreachable": 0,
+        "failed": 0,
+        "skipped": 2
+      },
+      "logs": [
+        "[00:00:00] PLAY [PostgreSQL 16: Automated WAL Archive & Backup Snapshot] *********************************",
+        "[00:00:01] TASK [Gathering Facts] ******************************************************************",
+        "[00:00:04] ok: [pg-master-01.us-east.company.internal] (PostgreSQL 16.2 on x86_64-pc-linux-gnu)",
+        "[00:00:05] ok: [pg-replica-01.us-east.company.internal] (PostgreSQL 16.2 on x86_64-pc-linux-gnu)",
+        "[00:00:06] ok: [pg-replica-02.eu-west.company.internal] (PostgreSQL 16.2 on x86_64-pc-linux-gnu)",
+        "[00:00:07] ",
+        "[00:00:07] TASK [postgres : Verify WAL streaming replication status] *******************************",
+        "[00:00:09] ok: [pg-master-01.us-east.company.internal] => (sync_state=\"sync\", replay_lag=\"0ms\")",
+        "[00:00:10] ok: [pg-replica-01.us-east.company.internal] => (sync_state=\"async\", replay_lag=\"4ms\")",
+        "[00:00:11] ",
+        "[00:00:11] TASK [postgres : Initiate pg_basebackup with zstd compression] *************************",
+        "[00:00:45] changed: [pg-master-01.us-east.company.internal] => (backup_size=\"84.2 GB\", throughput=\"320 MB/s\")",
+        "[00:01:10] ",
+        "[00:01:10] TASK [postgres : Push encrypted snapshot to AWS S3 storage] *****************************",
+        "[00:01:45] changed: [pg-master-01.us-east.company.internal] => (s3_uri=\"s3://enterprise-db-backups/postgres/20260815_1948.tar.zst\")",
+        "[00:02:00] ",
+        "[00:02:00] PLAY RECAP *****************************************************************************",
+        "[00:02:02] pg-master-01.us-east.company.internal : ok=8    changed=2    unreachable=0    failed=0    skipped=0",
+        "[00:02:02] pg-replica-01.us-east.company.internal : ok=6    changed=0    unreachable=0    failed=0    skipped=0",
+        "[00:02:12] ==========================================================================================",
+        "[00:02:12] POSTGRESQL WAL BACKUP COMPLETED SUCCESSFULLY IN 2m 12s"
+      ]
+    },
+    {
+      "id": "task-1786826416301",
+      "templateId": "tmpl-pg-1",
+      "templateName": "PostgreSQL 16: Automated WAL Archive & Backup Snapshot",
+      "status": "success",
+      "startedAt": "2026-08-15T20:40:16.302Z",
+      "finishedAt": "2026-08-15T20:40:49.292Z",
+      "duration": "33s",
+      "triggeredBy": "Operator (Web UI)",
+      "inventoryName": "Production Enterprise DB Cluster",
+      "playbook": "playbooks/postgres_wal_backup.yml",
+      "extraVars": "{\"backup_type\": \"full\", \"compression\": \"zstd\", \"verify_checksum\": true, \"retention_days\": 60}",
+      "limit": "postgres_cluster",
+      "hostsStats": {
+        "ok": 18,
+        "changed": 6,
+        "unreachable": 0,
+        "failed": 0,
+        "skipped": 0
+      },
+      "logs": [
+        "[00:00:00] Initializing Ansible runner worker process...",
+        "[00:00:01] Injecting credentials & environment parameters...",
+        "[00:00:02] ansible-playbook -i inventories/production_enterprise_db_cluster playbooks/postgres_wal_backup.yml --limit postgres_cluster",
+        "[00:00:02] ",
+        "PLAY [PostgreSQL 16: Automated WAL Archive & Backup Snapshot] *****************************************************",
+        "TASK [Gathering Facts] ******************************************************************",
+        "[21:40:18] ok: [web-prod-01.us-east.company.internal] => (ansible_distribution=\"Ubuntu 24.04\", arch=\"x86_64\")",
+        "[21:40:20] ok: [web-prod-02.us-east.company.internal] => (ansible_distribution=\"Ubuntu 24.04\", arch=\"x86_64\")",
+        "[21:40:20] ok: [web-prod-03.eu-west.company.internal] => (ansible_distribution=\"Ubuntu 24.04\", arch=\"x86_64\")",
+        "",
+        "TASK [core : Validate configuration files & syntax] *********************************",
+        "[21:40:23] ok: [web-prod-01.us-east.company.internal]",
+        "[21:40:24] ok: [web-prod-02.us-east.company.internal]",
+        "[21:40:25] ok: [web-prod-03.eu-west.company.internal]",
+        "",
+        "TASK [service : Synchronize package updates & dependencies] *************************",
+        "[21:40:28] changed: [web-prod-01.us-east.company.internal] => (item=nginx, status=updated)",
+        "[21:40:29] changed: [web-prod-02.us-east.company.internal] => (item=nginx, status=updated)",
+        "[21:40:31] changed: [web-prod-03.eu-west.company.internal] => (item=nginx, status=updated)",
+        "",
+        "TASK [app : Deploy release bundle and configure environment] ***********************",
+        "[21:40:34] changed: [web-prod-01.us-east.company.internal] => (release=\"v2.4.0\", sha=\"8f12a4\")",
+        "[21:40:36] changed: [web-prod-02.us-east.company.internal] => (release=\"v2.4.0\", sha=\"8f12a4\")",
+        "[21:40:37] changed: [web-prod-03.eu-west.company.internal] => (release=\"v2.4.0\", sha=\"8f12a4\")",
+        "",
+        "TASK [healthcheck : Verify microservice response & latency] *************************",
+        "[21:40:40] ok: [web-prod-01.us-east.company.internal] => (HTTP 200, latency=14ms)",
+        "[21:40:42] ok: [web-prod-02.us-east.company.internal] => (HTTP 200, latency=17ms)",
+        "[21:40:43] ok: [web-prod-03.eu-west.company.internal] => (HTTP 200, latency=21ms)",
+        "",
+        "PLAY RECAP *****************************************************************************",
+        "[21:40:46] web-prod-01.us-east.company.internal : ok=6    changed=2    unreachable=0    failed=0    skipped=0",
+        "[21:40:46] web-prod-02.us-east.company.internal : ok=6    changed=2    unreachable=0    failed=0    skipped=0",
+        "[21:40:47] web-prod-03.eu-west.company.internal : ok=6    changed=2    unreachable=0    failed=0    skipped=0",
+        "==========================================================================================",
+        "PLAYBOOK EXECUTION COMPLETED SUCCESSFULLY IN 0m 28s"
+      ]
+    },
+    {
+      "id": "task-1786826977645",
+      "templateId": "tmpl-mssql-1",
+      "templateName": "MSSQL: AlwaysOn Availability Group Failover & Sync Verification",
+      "status": "success",
+      "startedAt": "2026-08-15T20:49:37.646Z",
+      "finishedAt": "2026-08-15T20:50:10.575Z",
+      "duration": "33s",
+      "triggeredBy": "Approved (dba.oncall@company.com)",
+      "inventoryName": "Production Enterprise DB Cluster",
+      "playbook": "playbooks/mssql_alwayson_failover.yml",
+      "extraVars": "{\"ag_name\":\"AG_PROD\",\"target_node\":\"mssql-node-02\",\"failover_type\":\"planned_maintenance\"}",
+      "hostsStats": {
+        "ok": 18,
+        "changed": 6,
+        "unreachable": 0,
+        "failed": 0,
+        "skipped": 0
+      },
+      "logs": [
+        "[00:00:00] Approving pending external request: req-901",
+        "[00:00:01] Requested by: dba.oncall@company.com (DevOps Portal - DBA Automation Bot)",
+        "[00:00:02] Reason: Host maintenance on primary MSSQL node 01 requires planned AG failover",
+        "[00:00:03] Starting Ansible runner worker...",
+        "PLAY [MSSQL: AlwaysOn Availability Group Failover & Sync Verification] *****************************************************",
+        "TASK [Gathering Facts] ******************************************************************",
+        "[21:49:40] ok: [web-prod-01.us-east.company.internal] => (ansible_distribution=\"Ubuntu 24.04\", arch=\"x86_64\")",
+        "[21:49:41] ok: [web-prod-02.us-east.company.internal] => (ansible_distribution=\"Ubuntu 24.04\", arch=\"x86_64\")",
+        "[21:49:42] ok: [web-prod-03.eu-west.company.internal] => (ansible_distribution=\"Ubuntu 24.04\", arch=\"x86_64\")",
+        "",
+        "TASK [core : Validate configuration files & syntax] *********************************",
+        "[21:49:45] ok: [web-prod-01.us-east.company.internal]",
+        "[21:49:46] ok: [web-prod-02.us-east.company.internal]",
+        "[21:49:46] ok: [web-prod-03.eu-west.company.internal]",
+        "",
+        "TASK [service : Synchronize package updates & dependencies] *************************",
+        "[21:49:49] changed: [web-prod-01.us-east.company.internal] => (item=nginx, status=updated)",
+        "[21:49:51] changed: [web-prod-02.us-east.company.internal] => (item=nginx, status=updated)",
+        "[21:49:52] changed: [web-prod-03.eu-west.company.internal] => (item=nginx, status=updated)",
+        "",
+        "TASK [app : Deploy release bundle and configure environment] ***********************",
+        "[21:49:55] changed: [web-prod-01.us-east.company.internal] => (release=\"v2.4.0\", sha=\"8f12a4\")",
+        "[21:49:57] changed: [web-prod-02.us-east.company.internal] => (release=\"v2.4.0\", sha=\"8f12a4\")",
+        "[21:49:58] changed: [web-prod-03.eu-west.company.internal] => (release=\"v2.4.0\", sha=\"8f12a4\")",
+        "",
+        "TASK [healthcheck : Verify microservice response & latency] *************************",
+        "[21:50:02] ok: [web-prod-01.us-east.company.internal] => (HTTP 200, latency=14ms)",
+        "[21:50:03] ok: [web-prod-02.us-east.company.internal] => (HTTP 200, latency=17ms)",
+        "[21:50:04] ok: [web-prod-03.eu-west.company.internal] => (HTTP 200, latency=21ms)",
+        "",
+        "PLAY RECAP *****************************************************************************",
+        "[21:50:07] web-prod-01.us-east.company.internal : ok=6    changed=2    unreachable=0    failed=0    skipped=0",
+        "[21:50:07] web-prod-02.us-east.company.internal : ok=6    changed=2    unreachable=0    failed=0    skipped=0",
+        "[21:50:08] web-prod-03.eu-west.company.internal : ok=6    changed=2    unreachable=0    failed=0    skipped=0",
+        "==========================================================================================",
+        "PLAYBOOK EXECUTION COMPLETED SUCCESSFULLY IN 0m 28s"
+      ]
+    }
+  ],
+  "schedules": [
+    {
+      "id": "sched-1",
+      "templateId": "tmpl-pg-1",
+      "templateName": "PostgreSQL 16: Automated WAL Archive & Backup Snapshot",
+      "cron": "0 2 * * *",
+      "cronHuman": "Every day at 02:00 AM UTC",
+      "enabled": true,
+      "lastRun": "2026-08-15T02:00:00.000Z",
+      "nextRun": "2026-08-16T02:00:00.000Z"
+    },
+    {
+      "id": "sched-2",
+      "templateId": "tmpl-mssql-2",
+      "templateName": "MSSQL: Index Defragmentation & Transaction Log Shrink",
+      "cron": "0 1 * * 0",
+      "cronHuman": "Every Sunday at 01:00 AM UTC",
+      "enabled": true,
+      "lastRun": "2026-08-10T01:00:00.000Z",
+      "nextRun": "2026-08-17T01:00:00.000Z"
+    },
+    {
+      "id": "sched-3",
+      "templateId": "tmpl-oracle-2",
+      "templateName": "Oracle: RMAN Hot Database Full Backup with Compression",
+      "cron": "30 2 * * *",
+      "cronHuman": "Every day at 02:30 AM UTC",
+      "enabled": true,
+      "lastRun": "2026-08-15T02:30:00.000Z",
+      "nextRun": "2026-08-16T02:30:00.000Z"
+    },
+    {
+      "id": "sched-4",
+      "templateId": "tmpl-mysql-1",
+      "templateName": "MySQL 8.4: Percona XtraBackup Hot Online Backup",
+      "cron": "0 4 * * *",
+      "cronHuman": "Every day at 04:00 AM UTC",
+      "enabled": true,
+      "lastRun": "2026-08-15T04:00:00.000Z",
+      "nextRun": "2026-08-16T04:00:00.000Z"
+    }
+  ],
+  "pendingRequests": [
+    {
+      "id": "req-901",
+      "clientName": "DevOps Portal - DBA Automation Bot",
+      "clientIp": "192.168.4.88",
+      "templateId": "tmpl-mssql-1",
+      "templateName": "MSSQL: AlwaysOn Availability Group Failover & Sync Verification",
+      "submittedAt": "2026-08-15T20:30:15.000Z",
+      "status": "approved",
+      "requestedBy": "dba.oncall@company.com",
+      "extraVars": {
+        "ag_name": "AG_PROD",
+        "target_node": "mssql-node-02",
+        "failover_type": "planned_maintenance"
+      },
+      "reason": "Host maintenance on primary MSSQL node 01 requires planned AG failover",
+      "reviewedBy": "admin@semaphore.io",
+      "reviewedAt": "2026-08-15T20:49:37.645Z"
+    },
+    {
+      "id": "req-902",
+      "clientName": "Data Engineering Airflow Pipeline",
+      "clientIp": "192.168.5.12",
+      "templateId": "tmpl-pg-2",
+      "templateName": "PostgreSQL: Auto-Vacuum & Table Bloat Compaction",
+      "submittedAt": "2026-08-15T20:45:00.000Z",
+      "status": "pending",
+      "requestedBy": "airflow-service-account",
+      "extraVars": {
+        "vacuum_mode": "full",
+        "target_tables": "analytics_events,customer_transactions"
+      },
+      "reason": "Post ETL batch load vacuum and analyze trigger"
+    }
+  ],
+  "apiTokens": [
+    {
+      "id": "tok-1",
+      "name": "DBA Airflow & Automation Pipeline Token",
+      "tokenPrefix": "sem_live_9a7e",
+      "tokenFull": "sem_live_9a7e8b2c1f4e6d3a9b0c8d7e6f5a4b3c2d1e0f",
+      "scopes": [
+        "tasks:create",
+        "tasks:read",
+        "templates:read"
+      ],
+      "lastUsedAt": "2026-08-15T20:30:15.000Z",
+      "createdAt": "2026-01-15T09:00:00.000Z"
+    }
+  ],
+  "workflows": [
+    {
+      "id": "wf-1",
+      "name": "Enterprise Database Disaster Recovery & Failover Pipeline",
+      "description": "Multi-database cross-platform pipeline: Oracle RMAN Snapshot -> PostgreSQL WAL Archive -> MSSQL AG Failover Health Check -> Notification.",
+      "nodes": [
+        {
+          "id": "node-1",
+          "type": "start",
+          "label": "Pipeline Start",
+          "x": 100,
+          "y": 200,
+          "status": "idle"
+        },
+        {
+          "id": "node-2",
+          "type": "playbook",
+          "templateId": "tmpl-oracle-2",
+          "label": "1. Oracle RMAN Backup",
+          "playbook": "playbooks/oracle_rman_backup.yml",
+          "x": 320,
+          "y": 200,
+          "status": "idle"
+        },
+        {
+          "id": "node-3",
+          "type": "playbook",
+          "templateId": "tmpl-pg-1",
+          "label": "2. Postgres WAL Snapshot",
+          "playbook": "playbooks/postgres_wal_backup.yml",
+          "x": 580,
+          "y": 200,
+          "status": "idle"
+        },
+        {
+          "id": "node-4",
+          "type": "approval",
+          "label": "DBA Gate: Validate Checksums",
+          "x": 840,
+          "y": 200,
+          "status": "idle"
+        },
+        {
+          "id": "node-5",
+          "type": "playbook",
+          "templateId": "tmpl-mssql-1",
+          "label": "3. MSSQL AG Verification",
+          "playbook": "playbooks/mssql_alwayson_failover.yml",
+          "x": 1100,
+          "y": 140,
+          "status": "idle"
+        },
+        {
+          "id": "node-6",
+          "type": "notification",
+          "label": "Alert DBA On-Call",
+          "x": 1100,
+          "y": 280,
+          "status": "idle"
+        }
+      ],
+      "edges": [
+        {
+          "id": "e1",
+          "from": "node-1",
+          "to": "node-2",
+          "type": "always"
+        },
+        {
+          "id": "e2",
+          "from": "node-2",
+          "to": "node-3",
+          "type": "success"
+        },
+        {
+          "id": "e3",
+          "from": "node-3",
+          "to": "node-4",
+          "type": "success"
+        },
+        {
+          "id": "e4",
+          "from": "node-4",
+          "to": "node-5",
+          "type": "success"
+        },
+        {
+          "id": "e5",
+          "from": "node-4",
+          "to": "node-6",
+          "type": "failure"
+        }
+      ],
+      "totalRuns": 12,
+      "lastRunStatus": "success",
+      "lastRunAt": "2026-08-15T12:00:00.000Z"
+    }
+  ],
+  "users": [
+    {
+      "id": "usr-1",
+      "name": "Sarah Jenkins",
+      "email": "sarah.jenkins@enterprise-ops.com",
+      "role": "Admin",
+      "status": "active",
+      "lastLogin": "2026-08-15T20:40:00.000Z"
+    },
+    {
+      "id": "usr-1786826946381",
+      "name": "ghazi",
+      "email": "ghaz@gmail.com",
+      "role": "Read-Only",
+      "status": "active",
+      "lastLogin": "Never"
+    }
+  ]
+}

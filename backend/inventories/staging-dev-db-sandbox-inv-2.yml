@@ -1,0 +1,4 @@
+[dev_databases]
+dev-pg-01.internal ansible_host=10.20.1.20
+dev-mysql-01.internal ansible_host=10.20.1.21
+dev-mssql-01.internal ansible_host=10.20.1.22

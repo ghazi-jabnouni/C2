@@ -1,0 +1,37 @@
+﻿---
+# ============================================================
+# C2 Platform – Ansible Collection Requirements
+# Add any Ansible Galaxy collections your playbooks need here.
+# These are installed inside the Docker image at build time.
+# ============================================================
+
+collections:
+  # PostgreSQL modules (community.postgresql.*)
+  - name: community.postgresql
+    version: ">=3.0.0"
+
+  # General community utilities (community.general.*)
+  - name: community.general
+    version: ">=9.0.0"
+
+  # AWS modules (amazon.aws.*)
+  # - name: amazon.aws
+  #   version: ">=8.0.0"
+
+  # Azure modules (azure.azcollection.*)
+  # - name: azure.azcollection
+  #   version: ">=2.0.0"
+
+  # Windows management (ansible.windows.*)
+  # - name: ansible.windows
+  #   version: ">=2.0.0"
+
+  # Kubernetes / Helm (kubernetes.core.*)
+  # - name: kubernetes.core
+  #   version: ">=3.0.0"
+
+  # Docker modules (community.docker.*)
+  # - name: community.docker
+  #   version: ">=3.0.0"
+
+roles: []
