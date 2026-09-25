@@ -235,7 +235,7 @@ try {
 }
 
 // Add missing columns to templates if upgrading from old schema
-const templateCols = ['type','provider','terraformAction','description','dbType','repositoryId','playbook','inventoryId','credentialId','environmentId','extraVars','limit','tags','allowCliArgs','totalRuns','lastRunStatus','lastRunAt','createdAt','updatedAt','folderPath'];
+const templateCols = ['type','provider','terraformAction','winrmPort','winrmUseSsl','description','dbType','repositoryId','playbook','inventoryId','credentialId','environmentId','extraVars','limit','tags','allowCliArgs','totalRuns','lastRunStatus','lastRunAt','createdAt','updatedAt','folderPath'];
 for (const col of templateCols) {
   try { db.exec(`ALTER TABLE templates ADD COLUMN "${col}" TEXT`); } catch (_) {}
 }
@@ -251,6 +251,8 @@ try {
       type TEXT DEFAULT 'ansible',
       provider TEXT DEFAULT 'aws',
       terraformAction TEXT DEFAULT 'apply',
+      winrmPort TEXT DEFAULT '5985',
+      winrmUseSsl TEXT DEFAULT '0',
       status TEXT NOT NULL DEFAULT 'running',
       startedAt TEXT NOT NULL,
       finishedAt TEXT,
@@ -271,7 +273,7 @@ try {
   process.exit(1);
 }
 
-const taskCols = ['type', 'provider', 'terraformAction'];
+const taskCols = ['type', 'provider', 'terraformAction', 'winrmPort', 'winrmUseSsl'];
 for (const col of taskCols) {
   try { db.exec(`ALTER TABLE tasks ADD COLUMN "${col}" TEXT`); } catch (_) {}
 }

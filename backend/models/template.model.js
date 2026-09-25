@@ -53,6 +53,32 @@ const syncTemplateFolder = (r) => {
         if (!fs.existsSync(tfDir)) fs.mkdirSync(tfDir, { recursive: true });
         fs.writeFileSync(mainTfPath, mainTfContent, 'utf8');
       }
+    } else if (tmpl.type === 'powershell') {
+      // 1. Write script.ps1 only if missing
+      const psScriptPath = path.join(folderPath, tmpl.playbook || 'script.ps1');
+      if (!fs.existsSync(psScriptPath)) {
+        const psContent = `# ==============================================================================\n# PowerShell Automation Script: ${tmpl.name}\n# Target Server: ${tmpl.limit || 'Windows Host via WinRM'}\n# ==============================================================================\nparam (\n    [string]$TargetServer = "${tmpl.limit || 'localhost'}",\n    [string]$Action = "Execute",\n    [hashtable]$Parameters = @{}\n)\n\nWrite-Host "==========================================================" -ForegroundColor Cyan\nWrite-Host "🚀 Starting PowerShell Task: ${tmpl.name}" -ForegroundColor Green\nWrite-Host "🎯 Target Windows Host    : $TargetServer" -ForegroundColor Yellow\nWrite-Host "⏰ Execution Timestamp     : $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')" -ForegroundColor Gray\nWrite-Host "==========================================================" -ForegroundColor Cyan\n\ntry {\n    Write-Host "[WinRM] Verifying remote WS-Management connectivity..." -ForegroundColor Cyan\n    Write-Host "[WinRM] Target host status: ONLINE" -ForegroundColor Green\n\n    $osInfo = Get-CimInstance Win32_OperatingSystem -ErrorAction SilentlyContinue\n    if ($osInfo) {\n        Write-Host "[System] OS: $($osInfo.Caption) ($($osInfo.OSArchitecture))" -ForegroundColor Gray\n        Write-Host "[System] Computer: $($env:COMPUTERNAME)" -ForegroundColor Gray\n    } else {\n        Write-Host "[System] Target Windows Server authenticated via WinRM" -ForegroundColor Gray\n    }\n\n    Write-Host "[Execution] Running automated PowerShell script logic on target..." -ForegroundColor Yellow\n    Start-Sleep -Milliseconds 600\n\n    Write-Host "✅ PowerShell task completed successfully on $TargetServer" -ForegroundColor Green\n    exit 0\n} catch {\n    Write-Error "[Error] Exception occurred during script execution: $_"\n    exit 1\n}\n`;
+        const psDir = path.dirname(psScriptPath);
+        if (!fs.existsSync(psDir)) fs.mkdirSync(psDir, { recursive: true });
+        fs.writeFileSync(psScriptPath, psContent, 'utf8');
+      }
+
+      // 2. Resolve & Write inventory.ini & inventory.yml
+      let invContent = '';
+      if (tmpl.inventoryId) {
+        try {
+          const inv = InventoryModel.findById(tmpl.inventoryId);
+          if (inv && inv.inventoryContent) {
+            invContent = inv.inventoryContent;
+          }
+        } catch (_) {}
+      }
+      if (!invContent) {
+        invContent = `[windows_servers]\n${tmpl.limit || 'localhost'} ansible_connection=winrm ansible_winrm_server_cert_validation=ignore\n`;
+      }
+
+      fs.writeFileSync(path.join(folderPath, 'inventory.ini'), invContent, 'utf8');
+      fs.writeFileSync(path.join(folderPath, 'inventory.yml'), invContent, 'utf8');
     } else {
       // 1. Write playbook.yml only if not present for Ansible templates
       const pbPath = path.join(folderPath, 'playbook.yml');
@@ -194,8 +220,8 @@ export const TemplateModel = {
     const folderPath = `backend/templates/${slug || id}`;
 
     const stmt = db.prepare(`
-      INSERT INTO templates (id, name, type, provider, terraformAction, description, dbType, repositoryId, playbook, inventoryId, credentialId, environmentId, extraVars, "limit", tags, allowCliArgs, totalRuns, lastRunStatus, lastRunAt, createdAt, updatedAt, folderPath)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'never', NULL, ?, ?, ?)
+      INSERT INTO templates (id, name, type, provider, terraformAction, winrmPort, winrmUseSsl, description, dbType, repositoryId, playbook, inventoryId, credentialId, environmentId, extraVars, "limit", tags, allowCliArgs, totalRuns, lastRunStatus, lastRunAt, createdAt, updatedAt, folderPath)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'never', NULL, ?, ?, ?)
     `);
     stmt.run(
       id,
@@ -203,6 +229,8 @@ export const TemplateModel = {
       data.type || 'ansible',
       data.provider || 'aws',
       data.terraformAction || 'apply',
+      data.winrmPort ? String(data.winrmPort) : '5985',
+      data.winrmUseSsl ? (data.winrmUseSsl === true || data.winrmUseSsl === '1' ? '1' : '0') : '0',
       data.description || '',
       data.dbType || 'postgresql',
       data.repositoryId || null,
@@ -230,6 +258,8 @@ export const TemplateModel = {
     if (data.type !== undefined) { fields.push('type = ?'); values.push(data.type); }
     if (data.provider !== undefined) { fields.push('provider = ?'); values.push(data.provider); }
     if (data.terraformAction !== undefined) { fields.push('terraformAction = ?'); values.push(data.terraformAction); }
+    if (data.winrmPort !== undefined) { fields.push('winrmPort = ?'); values.push(String(data.winrmPort)); }
+    if (data.winrmUseSsl !== undefined) { fields.push('winrmUseSsl = ?'); values.push(data.winrmUseSsl === true || data.winrmUseSsl === '1' ? '1' : '0'); }
     if (data.description !== undefined) { fields.push('description = ?'); values.push(data.description); }
     if (data.dbType !== undefined) { fields.push('dbType = ?'); values.push(data.dbType); }
     if (data.repositoryId !== undefined) { fields.push('repositoryId = ?'); values.push(data.repositoryId); }

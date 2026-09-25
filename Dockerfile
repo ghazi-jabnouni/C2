@@ -29,6 +29,7 @@ FROM node:22-bookworm-slim AS production
 # ---- System tools ----
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
+    wget \
     unzip \
     gnupg \
     git \
@@ -42,9 +43,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
+# ---- PowerShell runtime for local and WinRM task execution ----
+RUN wget -q https://packages.microsoft.com/config/debian/12/packages-microsoft-prod.deb -O /tmp/packages-microsoft-prod.deb \
+ && dpkg -i /tmp/packages-microsoft-prod.deb \
+ && rm /tmp/packages-microsoft-prod.deb \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends powershell \
+ && rm -rf /var/lib/apt/lists/*
+
 # ---- Ansible + Collections ----
 RUN python3 -m venv /opt/ansible-env \
- && /opt/ansible-env/bin/pip install --no-cache-dir ansible psycopg2-binary \
+ && /opt/ansible-env/bin/pip install --no-cache-dir ansible pywinrm psycopg2-binary \
  && ln -s /opt/ansible-env/bin/ansible         /usr/local/bin/ansible \
  && ln -s /opt/ansible-env/bin/ansible-playbook /usr/local/bin/ansible-playbook \
  && ln -s /opt/ansible-env/bin/ansible-galaxy   /usr/local/bin/ansible-galaxy \

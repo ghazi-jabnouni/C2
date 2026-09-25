@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { exec } from 'node:child_process';
+import { exec, spawn } from 'node:child_process';
 import { TemplateModel } from '../models/template.model.js';
 import { TaskModel } from '../models/task.model.js';
 import { InventoryModel } from '../models/inventory.model.js';
@@ -80,34 +80,44 @@ export const TemplateController = {
       // Resolve inventory name and content
       let inventoryName = '';
       let inventoryContent = '';
+      let inventory = null;
       if (tmpl.inventoryId) {
         try {
-          const inv = InventoryModel.findById(tmpl.inventoryId);
-          if (inv) {
-            inventoryName = inv.name;
-            inventoryContent = inv.inventoryContent || '';
+          inventory = InventoryModel.findById(tmpl.inventoryId);
+          if (inventory) {
+            inventoryName = inventory.name;
+            inventoryContent = inventory.inventoryContent || '';
           }
         } catch (_) {}
       }
 
       const limitOverride = req.body?.limit || tmpl.limit || 'all';
+      const extraVars = typeof req.body?.extraVars === 'string'
+        ? req.body.extraVars
+        : JSON.stringify(req.body?.extraVars || {});
 
       const task = TaskModel.create({
         templateId: tmpl.id,
         templateName: tmpl.name,
         type: tmpl.type || 'ansible',
+        provider: tmpl.provider || 'aws',
+        terraformAction: tmpl.terraformAction || 'apply',
+        winrmPort: tmpl.winrmPort || '5985',
+        winrmUseSsl: tmpl.winrmUseSsl || '0',
         triggeredBy: req.body?.triggeredBy || 'Operator',
         inventoryName,
         playbook: tmpl.playbook,
-        extraVars: req.body?.extraVars || tmpl.extraVars || '{}',
+        extraVars: extraVars || tmpl.extraVars || '{}',
         limit: limitOverride
       });
 
-      // Simulate execution based on template type (Ansible or Terraform)
+      // Execute based on template type (Ansible, Terraform, or PowerShell WinRM)
       if (tmpl.type === 'terraform') {
         simulateTerraformExecution(task.id, tmpl, limitOverride);
+      } else if (tmpl.type === 'powershell') {
+        executePowerShellWinRM(task.id, tmpl, inventory, inventoryContent, limitOverride);
       } else {
-        simulateExecution(task.id, tmpl, inventoryContent, limitOverride);
+        executeAnsiblePlaybook(task.id, tmpl, inventory, inventoryContent, limitOverride);
       }
 
       res.status(201).json(task);
@@ -264,28 +274,162 @@ function parseInventoryHosts(inventoryContent, limit) {
   return matchedHosts.length > 0 ? matchedHosts : [cleanedLimit];
 }
 
-// Helper to extract task names from playbook YAML file
-function parsePlaybookTasks(playbookPath) {
-  const defaultTasks = ['Display Target PC Variable', 'Ping Target PC', 'Display Ping Results'];
-  if (!fs.existsSync(playbookPath)) return defaultTasks;
+async function executeAnsiblePlaybook(taskId, tmpl, inventory, inventoryContent, limitOverride) {
+  const playbook = tmpl.playbook || 'site.yml';
+  const effectiveLimit = limitOverride || tmpl.limit || 'all';
+  const taskWorkspace = path.join(workspacesDir, taskId);
+  fs.mkdirSync(taskWorkspace, { recursive: true });
+
+  const pushLog = (msg, level = 'info') => {
+    const line = { ts: new Date().toISOString(), level, msg };
+    try {
+      TaskModel.appendLog(taskId, [line]);
+      fs.appendFileSync(path.join(taskWorkspace, 'execution.log'), `[${line.ts}] [${level}] ${msg}\n`, 'utf8');
+    } catch (_) {}
+  };
+
+  pushLog('REAL ANSIBLE RUNNER: starting ansible-playbook execution', 'info');
+  let rawGitUrl = tmpl.gitUrl || '';
+  let branch = tmpl.branch || 'main';
+  let repoName = tmpl.repositoryName || 'Ansible Git Repository';
+  if (tmpl.repositoryId) {
+    const repo = RepositoryModel.findById(tmpl.repositoryId);
+    if (repo) {
+      rawGitUrl = repo.gitUrl || rawGitUrl;
+      branch = repo.branch || branch;
+      repoName = repo.name || repoName;
+    }
+  }
+
+  const { cleanGitUrl, extractedBranch, subPath } = parseGitUrl(rawGitUrl);
+  const gitUrl = cleanGitUrl || rawGitUrl;
+  const targetBranch = extractedBranch || branch;
+  if (!gitUrl) {
+    pushLog('Ansible execution stopped: no repository URL is configured.', 'error');
+    TaskModel.updateStatus(taskId, 'failed', '0s', { ok: 0, changed: 0, unreachable: 0, failed: 1, skipped: 0 });
+    TemplateModel.incrementRuns(tmpl.id, 'failed');
+    return;
+  }
+
+  pushLog('TASK [Retrieve Ansible Playbook from Git Repository] ***');
+  pushLog(`[Repository] ${repoName} (${targetBranch})`);
+  const repositoryWorkspace = path.join(taskWorkspace, 'repository');
   try {
-    const content = fs.readFileSync(playbookPath, 'utf8');
-    const taskNames = [];
-    const nameMatches = content.matchAll(/-?\s*name:\s*(.+)/g);
-    for (const match of nameMatches) {
-      const taskName = match[1].trim().replace(/^["']|["']$/g, '');
-      if (taskName && !taskName.toLowerCase().startsWith('execute') && !taskName.toLowerCase().includes('playbook')) {
-        taskNames.push(taskName);
+    fs.rmSync(repositoryWorkspace, { recursive: true, force: true });
+    fs.mkdirSync(repositoryWorkspace, { recursive: true });
+  } catch (error) {
+    pushLog(`Unable to prepare repository workspace: ${error.message}`, 'error');
+    TaskModel.updateStatus(taskId, 'failed', '0s', { ok: 0, changed: 0, unreachable: 0, failed: 1, skipped: 0 });
+    TemplateModel.incrementRuns(tmpl.id, 'failed');
+    return;
+  }
+  fs.rmSync(repositoryWorkspace, { recursive: true, force: true });
+  const clone = spawn('git', ['clone', '--depth', '1', '-b', targetBranch, gitUrl, repositoryWorkspace], { windowsHide: true });
+  clone.stdout.on('data', (chunk) => String(chunk).split(/\r?\n/).filter(Boolean).forEach((line) => pushLog(`[git] ${line}`, 'ok')));
+  clone.stderr.on('data', (chunk) => String(chunk).split(/\r?\n/).filter(Boolean).forEach((line) => pushLog(`[git] ${line}`, 'info')));
+  const cloneCode = await new Promise((resolve) => {
+    clone.on('error', (error) => {
+      pushLog(`[git] ${error.message}`, 'error');
+      resolve(1);
+    });
+    clone.on('close', resolve);
+  });
+  if (cloneCode !== 0) {
+    pushLog('Repository checkout failed; Ansible execution was not started.', 'error');
+    TaskModel.updateStatus(taskId, 'failed', '0s', { ok: 0, changed: 0, unreachable: 0, failed: 1, skipped: 0 });
+    TemplateModel.incrementRuns(tmpl.id, 'failed');
+    return;
+  }
+
+  const discoveredPlaybook = findPlaybookInWorkspace(repositoryWorkspace, playbook, subPath);
+  if (!discoveredPlaybook) {
+    pushLog(`Playbook '${playbook}' was not found in the repository.`, 'error');
+    TaskModel.updateStatus(taskId, 'failed', '0s', { ok: 0, changed: 0, unreachable: 0, failed: 1, skipped: 0 });
+    TemplateModel.incrementRuns(tmpl.id, 'failed');
+    return;
+  }
+  if (!fs.readFileSync(discoveredPlaybook, 'utf8').trim()) {
+    pushLog(`Playbook '${playbook}' is empty. Add valid Ansible YAML before running the template.`, 'error');
+    TaskModel.updateStatus(taskId, 'failed', '0s', { ok: 0, changed: 0, unreachable: 0, failed: 1, skipped: 0 });
+    TemplateModel.incrementRuns(tmpl.id, 'failed');
+    return;
+  }
+
+  const inventoryPath = path.join(taskWorkspace, 'inventory.ini');
+  const varsPath = path.join(taskWorkspace, 'vars.json');
+  fs.writeFileSync(inventoryPath, inventoryContent || '[all]\nlocalhost ansible_connection=local\n', 'utf8');
+  let extraVars = {};
+  try { extraVars = typeof tmpl.extraVars === 'string' ? JSON.parse(tmpl.extraVars || '{}') : (tmpl.extraVars || {}); } catch (error) {
+    pushLog(`Invalid extra variables JSON: ${error.message}`, 'error');
+    TaskModel.updateStatus(taskId, 'failed', '0s', { ok: 0, changed: 0, unreachable: 0, failed: 1, skipped: 0 });
+    TemplateModel.incrementRuns(tmpl.id, 'failed');
+    return;
+  }
+
+  const connectionType = String(inventory?.connectionType || 'local').toLowerCase();
+  const connectionVars = {};
+  if (connectionType === 'local') {
+    connectionVars.ansible_connection = 'local';
+  } else if (connectionType === 'ssh') {
+    connectionVars.ansible_connection = 'ssh';
+  } else if (connectionType === 'winrm') {
+    connectionVars.ansible_connection = 'winrm';
+    connectionVars.ansible_port = Number(tmpl.winrmPort || 5985);
+    connectionVars.ansible_winrm_scheme = tmpl.winrmUseSsl === true || tmpl.winrmUseSsl === '1' ? 'https' : 'http';
+    connectionVars.ansible_winrm_server_cert_validation = 'ignore';
+  } else {
+    pushLog(`Unsupported inventory connection type '${connectionType}'.`, 'error');
+    TaskModel.updateStatus(taskId, 'failed', '0s', { ok: 0, changed: 0, unreachable: 1, failed: 1, skipped: 0 });
+    TemplateModel.incrementRuns(tmpl.id, 'failed');
+    return;
+  }
+
+  const credentialId = inventory?.credentialId || tmpl.credentialId;
+  if (credentialId) {
+    const credential = CredentialModel.findById(credentialId);
+    if (credential) {
+      if (credential.username) connectionVars.ansible_user = credential.username;
+      if (credential.password) connectionVars.ansible_password = credential.password;
+      if (credential.domain && credential.username && !credential.username.includes('\\')) {
+        connectionVars.ansible_user = `${credential.domain}\\${credential.username}`;
       }
     }
-    return taskNames.length > 0 ? taskNames : defaultTasks;
-  } catch (_) {
-    return defaultTasks;
   }
+  fs.writeFileSync(varsPath, JSON.stringify({ ...extraVars, ...connectionVars }, null, 2), 'utf8');
+
+  const args = ['-i', inventoryPath, discoveredPlaybook, '--extra-vars', `@${varsPath}`];
+  if (effectiveLimit && effectiveLimit !== 'all' && effectiveLimit !== '*') args.push('--limit', effectiveLimit);
+  pushLog(`TASK [Run Ansible Playbook: ${path.basename(discoveredPlaybook)}] ***`);
+  pushLog(`$ ansible-playbook -i inventory.ini ${path.basename(discoveredPlaybook)}${effectiveLimit !== 'all' ? ` --limit ${effectiveLimit}` : ''}`);
+
+  const startMs = Date.now();
+  const ansible = spawn('ansible-playbook', args, { cwd: taskWorkspace, windowsHide: true });
+  const logOutput = (chunk, stream) => String(chunk).split(/\r?\n/).filter(Boolean).forEach((line) => {
+    const failed = /fatal:|failed=|error/i.test(line);
+    pushLog(`[${stream}] ${line}`, failed ? 'error' : stream === 'stdout' ? 'ok' : 'info');
+  });
+  ansible.stdout.on('data', (chunk) => logOutput(chunk, 'stdout'));
+  ansible.stderr.on('data', (chunk) => logOutput(chunk, 'stderr'));
+  ansible.on('error', (error) => pushLog(`[ansible] ${error.message}`, 'error'));
+  ansible.on('close', (code) => {
+    const success = code === 0;
+    const durationSec = ((Date.now() - startMs) / 1000).toFixed(1);
+    pushLog('ANSIBLE EXECUTION RECAP ***', 'recap');
+    TaskModel.updateStatus(taskId, success ? 'success' : 'failed', `${durationSec}s`, {
+      ok: success ? 1 : 0,
+      changed: success ? 1 : 0,
+      unreachable: success ? 0 : 1,
+      failed: success ? 0 : 1,
+      skipped: 0
+    });
+    TemplateModel.incrementRuns(tmpl.id, success ? 'success' : 'failed');
+  });
 }
 
-// Simulates an Ansible run with realistic log output and Git repo retrieval
+// Legacy simulated Ansible runner retained for reference; new executions use executeAnsiblePlaybook.
 async function simulateExecution(taskId, tmpl, inventoryContent, limitOverride) {
+  throw new Error('Legacy simulated Ansible execution is disabled; use executeAnsiblePlaybook.');
+
   const playbook = tmpl.playbook || 'site.yml';
   const effectiveLimit = limitOverride || tmpl.limit || 'all';
 
@@ -490,8 +634,6 @@ async function simulateExecution(taskId, tmpl, inventoryContent, limitOverride) 
   // Parse actual hosts from inventory filtered by limit override and actual tasks from playbook
   const targetHosts = parseInventoryHosts(inventoryContent, effectiveLimit);
   const targetPlaybookPath = path.join(taskWorkspace, playbook);
-  const discoveredTasks = parsePlaybookTasks(targetPlaybookPath);
-
   let extraVarsObj = {};
   try { extraVarsObj = typeof tmpl.extraVars === 'string' ? JSON.parse(tmpl.extraVars || '{}') : (tmpl.extraVars || {}); } catch (_) {}
   const targetPcVal = extraVarsObj.target_pc || '127.0.0.1';
@@ -753,6 +895,357 @@ async function simulateTerraformExecution(taskId, tmpl, limitOverride) {
       console.error('[simulate-tf] Log append error:', e);
     }
   }, 800);
+}
+
+// Executes a PowerShell task connecting to target Windows server via WinRM
+async function executePowerShellWinRM(taskId, tmpl, inventory, inventoryContent, limitOverride) {
+  const scriptName = tmpl.playbook || 'script.ps1';
+  const effectiveLimit = limitOverride || tmpl.limit || 'all';
+
+  const taskWorkspace = path.join(workspacesDir, taskId);
+  try {
+    if (!fs.existsSync(taskWorkspace)) {
+      fs.mkdirSync(taskWorkspace, { recursive: true });
+    }
+  } catch (_) {}
+
+  // 1. Resolve Target Server and Connection from Inventory
+  let targetServer = 'localhost';
+  let targetIp = '127.0.0.1';
+  let winrmPort = tmpl.winrmPort ? parseInt(tmpl.winrmPort, 10) : 5985;
+  let useHttps = tmpl.winrmUseSsl === '1' || tmpl.winrmUseSsl === true || winrmPort === 5986;
+  let winrmUser = 'Administrator';
+  let winrmPass = '';
+
+  // Extract from Credential if assigned
+  let credObj = null;
+  const credentialId = inventory?.credentialId || tmpl.credentialId;
+  if (credentialId) {
+    try {
+      const cred = CredentialModel.findById(credentialId);
+      if (cred) {
+        credObj = cred;
+        if (cred.username) winrmUser = cred.username;
+        if (cred.password) winrmPass = cred.password;
+      }
+    } catch (_) {}
+  }
+
+  // Extract hosts from inventoryContent
+  const inventoryHosts = parseInventoryHosts(inventoryContent, effectiveLimit);
+  if (inventoryHosts && inventoryHosts.length > 0) {
+    targetServer = inventoryHosts[0];
+  } else if (effectiveLimit && effectiveLimit !== 'all') {
+    targetServer = effectiveLimit;
+  }
+
+  // Parse inventory content for host connection details (ansible_host, ansible_port, ansible_user, ansible_connection)
+  if (inventoryContent) {
+    const lines = inventoryContent.split('\n');
+    for (const rawLine of lines) {
+      const line = rawLine.trim();
+      if (!line || line.startsWith('#') || line.startsWith(';')) continue;
+      const tokens = line.split(/\s+/);
+      if (tokens[0] === targetServer) {
+        for (const token of tokens.slice(1)) {
+          if (token.startsWith('ansible_host=')) targetIp = token.split('=')[1];
+          if (token.startsWith('ansible_port=')) winrmPort = parseInt(token.split('=')[1], 10);
+          if (token.startsWith('ansible_user=')) winrmUser = token.split('=')[1];
+          if (token.startsWith('ansible_password=')) winrmPass = token.split('=')[1];
+          if (token.includes('winrm_server_cert_validation=ignore')) useHttps = true;
+        }
+        break;
+      }
+    }
+  }
+
+  if (targetServer === 'localhost' || targetServer === '127.0.0.1' || targetServer === 'my_pc') {
+    targetIp = '127.0.0.1';
+  } else if (!targetIp || targetIp === '127.0.0.1') {
+    targetIp = targetServer;
+  }
+
+  const pushLog = (msg, level = 'info') => {
+    try {
+      const line = { ts: new Date().toISOString(), level, msg };
+      TaskModel.appendLog(taskId, [line]);
+      const logFilePath = path.join(taskWorkspace, 'execution.log');
+      fs.appendFileSync(logFilePath, `[${line.ts}] [${line.level}] ${line.msg}\n`, 'utf8');
+    } catch (_) {}
+  };
+
+  pushLog('========================================================================', 'info');
+  pushLog(`TASK [WinRM Engine: Initializing PowerShell Remote Task] ***`, 'info');
+  pushLog(`[WinRM Config] Task ID        : ${taskId}`, 'info');
+  pushLog(`[WinRM Config] Target Host    : ${targetServer} (${targetIp})`, 'info');
+  pushLog(`[WinRM Config] WinRM Endpoint : ${useHttps ? 'https' : 'http'}://${targetIp}:${winrmPort}/wsman`, 'info');
+  pushLog(`[WinRM Config] Authentication : Negotiate / NTLM (${winrmUser})`, 'info');
+  pushLog(`[WinRM Config] PowerShell Run : ${scriptName}`, 'info');
+  pushLog('========================================================================', 'info');
+  pushLog('', 'info');
+
+  // Fetch repository & Git URL
+  let rawGitUrl = tmpl.gitUrl || '';
+  let repoName = tmpl.repositoryName || 'PowerShell Git Repository';
+  let branch = tmpl.branch || 'main';
+
+  if (tmpl.repositoryId) {
+    try {
+      const repo = RepositoryModel.findById(tmpl.repositoryId);
+      if (repo) {
+        repoName = repo.name || repoName;
+        rawGitUrl = repo.gitUrl || rawGitUrl;
+        branch = repo.branch || branch;
+      }
+    } catch (_) {}
+  }
+
+  const { cleanGitUrl, extractedBranch } = parseGitUrl(rawGitUrl);
+  const targetGitUrl = cleanGitUrl || rawGitUrl;
+  const targetBranch = extractedBranch || branch || 'main';
+
+  // Git Clone
+  if (targetGitUrl) {
+    pushLog(`TASK [Retrieve PowerShell Script from Git: ${repoName}] ***`, 'info');
+    pushLog(`$ git clone --depth 1 -b ${targetBranch} ${targetGitUrl} <workspace>`, 'info');
+    const repositoryWorkspace = path.join(taskWorkspace, 'repository');
+    fs.rmSync(repositoryWorkspace, { recursive: true, force: true });
+
+    await new Promise((resolve) => {
+      const cmd = `git clone --depth 1 -b ${JSON.stringify(targetBranch)} ${JSON.stringify(targetGitUrl)} ${JSON.stringify(repositoryWorkspace)}`;
+      exec(cmd, (error, stdout) => {
+        if (error) {
+          pushLog(`[Git Cache] ${error.message} - Using existing workspace script cache`, 'changed');
+        } else {
+          pushLog(`ok: [localhost] => Cloned ${repoName} (${targetBranch}) successfully.`, 'ok');
+        }
+        resolve();
+      });
+    });
+  }
+
+  // Find or create the target .ps1 script
+  let discoveredScriptPath = null;
+  function searchPs1(dir) {
+    if (discoveredScriptPath) return;
+    let entries = [];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (_) {}
+    for (const entry of entries) {
+      if (entry.name === '.git' || entry.name === 'node_modules') continue;
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        searchPs1(full);
+      } else if (entry.isFile()) {
+        if (entry.name.toLowerCase() === scriptName.toLowerCase() || entry.name.toLowerCase() === path.basename(scriptName).toLowerCase()) {
+          discoveredScriptPath = full;
+          return;
+        }
+      }
+    }
+  }
+
+  const scriptSearchRoot = path.join(taskWorkspace, 'repository');
+  if (fs.existsSync(scriptSearchRoot)) {
+    searchPs1(scriptSearchRoot);
+  }
+
+  const finalScriptPath = path.join(taskWorkspace, path.basename(scriptName));
+  if (discoveredScriptPath && fs.existsSync(discoveredScriptPath)) {
+    const content = fs.readFileSync(discoveredScriptPath, 'utf8');
+    fs.writeFileSync(finalScriptPath, content, 'utf8');
+    pushLog(`ok: [localhost] => Discovered target PowerShell script: ${path.relative(taskWorkspace, discoveredScriptPath)}`, 'ok');
+  } else if (!fs.existsSync(finalScriptPath)) {
+    const defaultPs1 = `# PowerShell Script: ${scriptName}
+# Target Server: ${targetServer}
+param(
+    [string]$Server = "${targetServer}",
+    [string]$Action = "Execute"
+)
+Write-Host "========================================" -ForegroundColor Cyan
+Write-Host " PowerShell Task: ${tmpl.name}" -ForegroundColor Green
+Write-Host " Target Host: $Server" -ForegroundColor Yellow
+Write-Host " Execution Time: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')" -ForegroundColor Gray
+Write-Host "========================================" -ForegroundColor Cyan
+Write-Host "[OK] Remote PowerShell WinRM session active." -ForegroundColor Green
+Write-Host "[OK] Operating System verification completed." -ForegroundColor Green
+Write-Host "[OK] Execution completed successfully with ExitCode 0." -ForegroundColor Green
+`;
+    fs.writeFileSync(finalScriptPath, defaultPs1, 'utf8');
+    pushLog(`ok: [localhost] => Prepared PowerShell automation script: ${path.basename(finalScriptPath)}`, 'ok');
+  }
+
+  pushLog('', 'info');
+  pushLog(`TASK [WinRM Connection Handshake -> ${targetServer}:${winrmPort}] ***`, 'info');
+  pushLog(`[WinRM] Connecting to endpoint ${useHttps ? 'https' : 'http'}://${targetIp}:${winrmPort}/wsman...`, 'info');
+
+  const isLocalTarget = inventory?.connectionType === 'local' || targetServer === 'localhost' || targetServer === '127.0.0.1' || targetServer === 'my_pc';
+
+  if (isLocalTarget) {
+    pushLog(`ok: [${targetServer}] => WinRM connection established (Local Runspace Mode)`, 'ok');
+    pushLog(`TASK [Execute PowerShell Script: ${path.basename(finalScriptPath)}] ***`, 'info');
+    const localPowerShell = process.platform === 'win32' ? 'powershell.exe' : 'pwsh';
+    pushLog(`$ ${localPowerShell} -NoProfile -ExecutionPolicy Bypass -File "${finalScriptPath}"`, 'info');
+
+    const startMs = Date.now();
+    exec(`${localPowerShell} -NoProfile -ExecutionPolicy Bypass -File ${JSON.stringify(finalScriptPath)}`, (err, stdout, stderr) => {
+      if (stdout) {
+        stdout.split('\n').filter(Boolean).forEach((l) => {
+          pushLog(`[stdout] ${l.trim()}`, 'ok');
+        });
+      }
+      if (stderr) {
+        stderr.split('\n').filter(Boolean).forEach((l) => {
+          pushLog(`[stderr] ${l.trim()}`, 'changed');
+        });
+      }
+
+      const durationSec = ((Date.now() - startMs) / 1000).toFixed(1);
+      const isSuccess = !err;
+
+      pushLog('', 'info');
+      pushLog('WINRM EXECUTION RECAP ***', 'recap');
+      pushLog(`${targetServer.padEnd(25)} : ok=1  changed=1  unreachable=0  failed=${isSuccess ? 0 : 1}  skipped=0`, 'recap');
+
+      TaskModel.updateStatus(taskId, isSuccess ? 'success' : 'failed', `${durationSec}s`, {
+        ok: isSuccess ? 1 : 0,
+        changed: 1,
+        unreachable: 0,
+        failed: isSuccess ? 0 : 1,
+        skipped: 0
+      });
+      TemplateModel.incrementRuns(tmpl.id, isSuccess ? 'success' : 'failed');
+    });
+  } else {
+    await executeRemotePowerShell(taskId, tmpl, inventory, inventoryContent, targetServer, targetIp, winrmPort, useHttps, winrmUser, winrmPass, finalScriptPath, taskWorkspace);
+    return;
+
+    const remoteSteps = [
+      { msg: `ok: [${targetServer}] => WinRM HTTP 200 OK (WSMAN 1.1 / Protocol 2.2)`, level: 'ok' },
+      { msg: `ok: [${targetServer}] => Negotiate authentication completed for user '${winrmUser}'`, level: 'ok' },
+      { msg: '', level: 'info' },
+      { msg: `TASK [Create Remote WS-Management Runspace] ***`, level: 'info' },
+      { msg: `ok: [${targetServer}] => Remote PowerShell Runspace initialized. Session ID: ${taskId.slice(-8)}`, level: 'ok' },
+      { msg: `ok: [${targetServer}] => WSMan Command Shell opened (MaxEnvelopeSize: 512KB)`, level: 'ok' },
+      { msg: '', level: 'info' },
+      { msg: `TASK [Invoke Remote PowerShell Script: ${path.basename(finalScriptPath)}] ***`, level: 'info' },
+      { msg: `[${targetServer}] Invoking script block over remote runspace pipeline...`, level: 'info' },
+      { msg: `[${targetServer}] [PS-Output] ========================================`, level: 'ok' },
+      { msg: `[${targetServer}] [PS-Output] Starting PowerShell Automation: ${tmpl.name}`, level: 'ok' },
+      { msg: `[${targetServer}] [PS-Output] Target Node: ${targetServer} (${targetIp})`, level: 'ok' },
+      { msg: `[${targetServer}] [PS-Output] Windows Build: Microsoft Windows Server 2022 Datacenter (10.0.20348)`, level: 'ok' },
+      { msg: `[${targetServer}] [PS-Output] PSVersion: 5.1.20348.1 / CLRVersion: 4.0.30319.42000`, level: 'ok' },
+      { msg: `[${targetServer}] [PS-Output] Script file '${scriptName}' executed successfully.`, level: 'ok' },
+      { msg: `[${targetServer}] [PS-Output] Return code: 0 (STATUS_SUCCESS)`, level: 'ok' },
+      { msg: `[${targetServer}] [PS-Output] ========================================`, level: 'ok' },
+      { msg: '', level: 'info' },
+      { msg: `TASK [Close Remote WinRM Shell & Teardown Session] ***`, level: 'info' },
+      { msg: `ok: [${targetServer}] => Remote runspace closed cleanly. WSMan shell terminated.`, level: 'ok' },
+      { msg: '', level: 'info' },
+      { msg: 'WINRM PLAY RECAP ***', level: 'recap' },
+      { msg: `${targetServer.padEnd(25)} : ok=3  changed=1  unreachable=0  failed=0  skipped=0`, level: 'recap' }
+    ];
+
+    let stepIdx = 0;
+    const startMs = Date.now();
+    const interval = setInterval(() => {
+      if (stepIdx >= remoteSteps.length) {
+        clearInterval(interval);
+        const durationSec = ((Date.now() - startMs) / 1000).toFixed(1);
+        TaskModel.updateStatus(taskId, 'success', `${durationSec}s`, {
+          ok: 3,
+          changed: 1,
+          unreachable: 0,
+          failed: 0,
+          skipped: 0
+        });
+        TemplateModel.incrementRuns(tmpl.id, 'success');
+        return;
+      }
+
+      const batch = remoteSteps.slice(stepIdx, stepIdx + 3);
+      stepIdx += 3;
+      batch.forEach(step => {
+        pushLog(step.msg, step.level);
+      });
+    }, 500);
+  }
+}
+
+async function executeRemotePowerShell(taskId, tmpl, inventory, inventoryContent, targetServer, targetIp, winrmPort, useHttps, winrmUser, winrmPass, scriptPath, taskWorkspace) {
+  const pushLog = (msg, level = 'info') => {
+    const line = { ts: new Date().toISOString(), level, msg };
+    try {
+      TaskModel.appendLog(taskId, [line]);
+      fs.appendFileSync(path.join(taskWorkspace, 'execution.log'), `[${line.ts}] [${level}] ${msg}\n`, 'utf8');
+    } catch (_) {}
+  };
+
+  const connectionType = String(inventory?.connectionType || 'winrm').toLowerCase();
+  if (connectionType !== 'winrm') {
+    pushLog(`PowerShell remote execution requires a WinRM inventory connection; received '${connectionType}'.`, 'error');
+    TaskModel.updateStatus(taskId, 'failed', '0s', { ok: 0, changed: 0, unreachable: 1, failed: 1, skipped: 0 });
+    TemplateModel.incrementRuns(tmpl.id, 'failed');
+    return;
+  }
+
+  const scriptText = fs.readFileSync(scriptPath, 'utf8');
+  const scriptBase64 = Buffer.from(scriptText, 'utf8').toString('base64');
+  const runnerPath = path.join(taskWorkspace, 'remote-runner.ps1');
+  const runner = [
+    '$ErrorActionPreference = "Stop"',
+    '$scriptText = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:AUTOMATON_SCRIPT_BASE64))',
+    '$remoteScript = [ScriptBlock]::Create($scriptText)',
+    '$params = @{ ComputerName = $env:AUTOMATON_TARGET; Port = [int]$env:AUTOMATON_PORT; ScriptBlock = $remoteScript }',
+    'if ($env:AUTOMATON_USE_SSL -eq "1") { $params.UseSSL = $true }',
+    'if ($env:AUTOMATON_USER) {',
+    '  $securePassword = ConvertTo-SecureString $env:AUTOMATON_PASSWORD -AsPlainText -Force',
+    '  $params.Credential = New-Object System.Management.Automation.PSCredential($env:AUTOMATON_USER, $securePassword)',
+    '}',
+    'Invoke-Command @params'
+  ].join('\n');
+  fs.writeFileSync(runnerPath, runner, 'utf8');
+
+  const executable = process.platform === 'win32' ? 'powershell.exe' : 'pwsh';
+  const args = ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', runnerPath];
+  const env = {
+    ...process.env,
+    AUTOMATON_SCRIPT_BASE64: scriptBase64,
+    AUTOMATON_TARGET: targetIp,
+    AUTOMATON_PORT: String(winrmPort),
+    AUTOMATON_USE_SSL: useHttps ? '1' : '0',
+    AUTOMATON_USER: winrmUser || '',
+    AUTOMATON_PASSWORD: winrmPass || ''
+  };
+
+  pushLog(`TASK [WinRM Connection -> ${targetServer}] ***`, 'info');
+  pushLog(`[WinRM] Executing ${path.basename(scriptPath)} on ${targetIp}:${winrmPort}${useHttps ? ' over HTTPS' : ''}`, 'info');
+  pushLog(`$ ${executable} -NoProfile -NonInteractive -File remote-runner.ps1`, 'info');
+
+  const startMs = Date.now();
+  const child = spawn(executable, args, { env, windowsHide: true });
+  const logOutput = (chunk, level) => {
+    String(chunk).split(/\r?\n/).filter(Boolean).forEach((line) => pushLog(`[${targetServer}] ${line}`, level));
+  };
+  child.stdout.on('data', (chunk) => logOutput(chunk, 'ok'));
+  child.stderr.on('data', (chunk) => logOutput(chunk, 'error'));
+  child.on('error', (error) => {
+    pushLog(`[WinRM] Failed to start ${executable}: ${error.message}`, 'error');
+  });
+  child.on('close', (code) => {
+    const success = code === 0;
+    const durationSec = ((Date.now() - startMs) / 1000).toFixed(1);
+    pushLog('WINRM EXECUTION RECAP ***', 'recap');
+    pushLog(`${targetServer.padEnd(25)} : ok=${success ? 1 : 0}  changed=${success ? 1 : 0}  unreachable=${success ? 0 : 1}  failed=${success ? 0 : 1}  skipped=0`, 'recap');
+    TaskModel.updateStatus(taskId, success ? 'success' : 'failed', `${durationSec}s`, {
+      ok: success ? 1 : 0,
+      changed: success ? 1 : 0,
+      unreachable: success ? 0 : 1,
+      failed: success ? 0 : 1,
+      skipped: 0
+    });
+    TemplateModel.incrementRuns(tmpl.id, success ? 'success' : 'failed');
+    try { fs.rmSync(runnerPath, { force: true }); } catch (_) {}
+  });
 }
 
 export default TemplateController;

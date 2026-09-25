@@ -102,9 +102,12 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
   const [templates, setTemplates] = useState<TaskTemplate[]>([]);
   const [selectedWf, setSelectedWf] = useState<Workflow | null>(null);
   const [isRunning, setIsRunning] = useState(false);
+  const [workflowLimit, setWorkflowLimit] = useState('all');
+  const [workflowStartNodeId, setWorkflowStartNodeId] = useState('');
   const [executionLogs, setExecutionLogs] = useState<string[]>([]);
   const [showAddNodeModal, setShowAddNodeModal] = useState(false);
   const [selectedNodeForHistory, setSelectedNodeForHistory] = useState<WorkflowNode | null>(null);
+  const [latestNodeExecution, setLatestNodeExecution] = useState<TaskExecution | null>(null);
   const [showHistoryPanel, setShowHistoryPanel] = useState(false);
 
   // Connection / Link modal state
@@ -139,12 +142,19 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
   };
 
   // Form for new node
-  const [nodeType, setNodeType] = useState<'playbook' | 'approval' | 'notification'>('playbook');
+  const [nodeType, setNodeType] = useState<'playbook' | 'approval' | 'notification' | 'email'>('playbook');
   const [nodeLabel, setNodeLabel] = useState('');
   const [nodeTemplateId, setNodeTemplateId] = useState('');
   const [nodeApprovalMessage, setNodeApprovalMessage] = useState('Require operator approval before continuing');
   const [nodeYesTargetId, setNodeYesTargetId] = useState('');
   const [nodeNoTargetId, setNodeNoTargetId] = useState('');
+  const [emailTo, setEmailTo] = useState('');
+  const [emailCc, setEmailCc] = useState('');
+  const [emailBcc, setEmailBcc] = useState('');
+  const [emailReplyTo, setEmailReplyTo] = useState('');
+  const [emailSubject, setEmailSubject] = useState('Workflow notification');
+  const [emailBody, setEmailBody] = useState('The workflow step completed.');
+  const [webhookUrl, setWebhookUrl] = useState('');
 
   // Configuration Modal for existing Approval Gate
   const [configuringApprovalNode, setConfiguringApprovalNode] = useState<WorkflowNode | null>(null);
@@ -380,12 +390,23 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
 
   const handleAddNode = () => {
     if (!selectedWf) return;
+    if (nodeType === 'notification' && !webhookUrl.trim()) {
+      alert('Enter a webhook endpoint before adding this node.');
+      return;
+    }
     const tmpl = templates.find((t) => t.id === nodeTemplateId);
     const newNode: WorkflowNode = {
       id: `node-${Date.now()}`,
       type: nodeType,
       label: nodeLabel || (nodeType === 'approval' ? 'Manual Approval Gate' : tmpl ? tmpl.name : 'Pipeline Step'),
       approvalMessage: nodeType === 'approval' ? (nodeApprovalMessage || 'Require operator sign-off before proceeding') : undefined,
+      emailTo: nodeType === 'email' ? emailTo.trim() : undefined,
+      emailCc: nodeType === 'email' ? emailCc.trim() : undefined,
+      emailBcc: nodeType === 'email' ? emailBcc.trim() : undefined,
+      emailReplyTo: nodeType === 'email' ? emailReplyTo.trim() : undefined,
+      emailSubject: nodeType === 'email' ? emailSubject.trim() : undefined,
+      emailBody: nodeType === 'email' ? emailBody : undefined,
+      hookUrl: nodeType === 'notification' ? webhookUrl.trim() : undefined,
       yesTargetNodeId: nodeType === 'approval' && nodeYesTargetId ? nodeYesTargetId : undefined,
       noTargetNodeId: nodeType === 'approval' && nodeNoTargetId ? nodeNoTargetId : undefined,
       templateId: nodeType === 'playbook' ? nodeTemplateId : undefined,
@@ -657,17 +678,43 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
       if (currNode.playbook) {
         appendLogs([
           `[${new Date().toLocaleTimeString()}] [FETCH] Playbook file: ${currNode.playbook}`,
-          `[${new Date().toLocaleTimeString()}] [EXECUTE] Running playbook tasks...`
+          `[${new Date().toLocaleTimeString()}] [EXECUTE] Running playbook tasks with --limit ${workflowLimit}...`
         ]);
       }
 
-      setTimeout(() => {
-        const isSimulatedFail = !!currNode.simulateFailure;
-        const outcomeStatus: WorkflowNode['status'] = isSimulatedFail ? 'failed' : 'success';
+      setTimeout(async () => {
+        let outcomeStatus: WorkflowNode['status'] = 'success';
+        if (currNode.type === 'playbook' && currNode.templateId) {
+          try {
+            const startedTask = await api.runTemplate(currNode.templateId, {
+              extraVars: '{}',
+              limit: workflowLimit || 'all',
+              triggeredBy: `Workflow: ${currentWf.name}`
+            });
+            appendLogs([
+              `[${new Date().toLocaleTimeString()}] [TASK] Started ${startedTask.id} with --limit ${workflowLimit || 'all'}`
+            ]);
 
-        if (isSimulatedFail) {
+            let task = startedTask;
+            while (task.status === 'running') {
+              await new Promise((resolve) => setTimeout(resolve, 1000));
+              task = await api.getTask(startedTask.id);
+            }
+            outcomeStatus = task.status === 'success' ? 'success' : 'failed';
+            if (task.logs?.length) {
+              appendLogs(task.logs.slice(-8).map((line) => `[${new Date().toLocaleTimeString()}] ${line}`));
+            }
+          } catch (error) {
+            outcomeStatus = 'failed';
+            appendLogs([`[${new Date().toLocaleTimeString()}] [TASK ERROR] ${error instanceof Error ? error.message : String(error)}`]);
+          }
+        } else if (currNode.simulateFailure) {
+          outcomeStatus = 'failed';
+        }
+
+        if (outcomeStatus === 'failed') {
           appendLogs([
-            `[${new Date().toLocaleTimeString()}] [FATAL ERROR] Task "${currNode.label}" failed! (Simulated Failure Mode active)`,
+            `[${new Date().toLocaleTimeString()}] [FATAL ERROR] Task "${currNode.label}" failed!`,
             `[${new Date().toLocaleTimeString()}] [BRANCH ENGINE] Triggering ON FAILURE & ALWAYS branches...`
           ]);
         } else {
@@ -893,7 +940,9 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
       if (n.yesTargetNodeId) hasIncoming.add(n.yesTargetNodeId);
       if (n.noTargetNodeId && n.noTargetNodeId !== 'stop') hasIncoming.add(n.noTargetNodeId);
     });
-    let queue = orderedNodes.filter((n) => !hasIncoming.has(n.id)).map((n) => n.id);
+    let queue = workflowStartNodeId
+      ? [workflowStartNodeId]
+      : orderedNodes.filter((n) => !hasIncoming.has(n.id)).map((n) => n.id);
     if (queue.length === 0 && orderedNodes.length > 0) {
       queue = [orderedNodes[0].id];
     }
@@ -1090,13 +1139,35 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
         ]);
       }
 
-      setTimeout(() => {
-        const isSimulatedFail = !!currNode.simulateFailure;
-        const outcomeStatus: WorkflowNode['status'] = isSimulatedFail ? 'failed' : 'success';
+      setTimeout(async () => {
+        let outcomeStatus: WorkflowNode['status'] = 'success';
+        if (currNode.type === 'playbook' && currNode.templateId) {
+          try {
+            const startedTask = await api.runTemplate(currNode.templateId, {
+              extraVars: '{}',
+              limit: workflowLimit || 'all',
+              triggeredBy: `Workflow: ${currentWf.name}`
+            });
+            appendLogs([`[${new Date().toLocaleTimeString()}] [TASK] ${startedTask.id} started with --limit ${workflowLimit || 'all'}`]);
+            let task = startedTask;
+            while (task.status === 'running') {
+              await new Promise((resolve) => setTimeout(resolve, 1000));
+              task = await api.getTask(startedTask.id);
+            }
+            outcomeStatus = task.status === 'success' ? 'success' : 'failed';
+            nodes = nodes.map(n => n.id === currNodeId ? { ...n, executionHistory: [task, ...(n.executionHistory || [])] } : n);
+            if (task.logs?.length) appendLogs(task.logs.slice(-8).map((line) => `[${new Date().toLocaleTimeString()}] ${line}`));
+          } catch (error) {
+            outcomeStatus = 'failed';
+            appendLogs([`[${new Date().toLocaleTimeString()}] [TASK ERROR] ${error instanceof Error ? error.message : String(error)}`]);
+          }
+        } else if (currNode.simulateFailure) {
+          outcomeStatus = 'failed';
+        }
 
-        if (isSimulatedFail) {
+        if (outcomeStatus === 'failed') {
           appendLogs([
-            `[${new Date().toLocaleTimeString()}] [FATAL ERROR] Task "${currNode.label}" failed! (Simulated Failure Mode active)`,
+            `[${new Date().toLocaleTimeString()}] [FATAL ERROR] Task "${currNode.label}" failed!`,
             `[${new Date().toLocaleTimeString()}] [BRANCH ENGINE] Triggering ON FAILURE (🔴 Red Arrow) & ALWAYS branches...`
           ]);
         } else {
@@ -1139,7 +1210,7 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
         });
 
         setTimeout(processQueue, 1200);
-      }, 1800);
+      }, currNode.type === 'playbook' ? 200 : 1800);
     }
 
     setTimeout(processQueue, 400);
@@ -1157,39 +1228,25 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
     return 'var(--accent-primary)';
   };
 
-  const handleNodeClick = (node: WorkflowNode) => {
-    const mockHistory: TaskExecution[] = [
-      {
-        id: `exec-${Date.now()}-1`,
-        templateId: node.templateId || '',
-        templateName: node.label,
-        status: 'success',
-        startedAt: new Date(Date.now() - 86400000).toISOString(),
-        finishedAt: new Date(Date.now() - 86300000).toISOString(),
-        duration: '2m 34s',
-        triggeredBy: 'admin',
-        inventoryName: 'Production Servers',
-        playbook: node.playbook || 'unknown.yml',
-        hostsStats: { ok: 12, changed: 8, unreachable: 0, failed: 0, skipped: 2 },
-        logs: ['PLAY [all] ***', 'TASK [Gathering Facts] ***', 'ok: [web-01]', 'ok: [web-02]']
-      },
-      {
-        id: `exec-${Date.now()}-2`,
-        templateId: node.templateId || '',
-        templateName: node.label,
-        status: 'failed',
-        startedAt: new Date(Date.now() - 172800000).toISOString(),
-        finishedAt: new Date(Date.now() - 172700000).toISOString(),
-        duration: '1m 12s',
-        triggeredBy: 'admin',
-        inventoryName: 'Production Servers',
-        playbook: node.playbook || 'unknown.yml',
-        hostsStats: { ok: 5, changed: 2, unreachable: 1, failed: 2, skipped: 0 },
-        logs: ['PLAY [all] ***', 'TASK [Install Package] ***', 'fatal: [web-03]: FAILED!']
-      }
-    ];
-
-    setSelectedNodeForHistory({ ...node, executionHistory: mockHistory });
+  const handleNodeClick = async (node: WorkflowNode) => {
+    if (!node.templateId) {
+      setLatestNodeExecution(null);
+      setSelectedNodeForHistory(node);
+      setShowHistoryPanel(true);
+      return;
+    }
+    try {
+      const history = await api.getTasks(node.templateId);
+      const orderedHistory = [...history].sort((a, b) =>
+        new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime()
+      );
+      setLatestNodeExecution(orderedHistory[0] || null);
+      setSelectedNodeForHistory({ ...node, executionHistory: orderedHistory });
+    } catch (error) {
+      alert(`Failed to load task history: ${error}`);
+      setLatestNodeExecution(null);
+      setSelectedNodeForHistory({ ...node, executionHistory: [] });
+    }
     setShowHistoryPanel(true);
   };
 
@@ -1273,6 +1330,30 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
             <Plus size={14} />
             <span>Add Node</span>
           </button>
+          <input
+            className="form-control"
+            value={workflowLimit}
+            onChange={(e) => setWorkflowLimit(e.target.value)}
+            placeholder="Server/group (--limit)"
+            title="Ansible --limit value passed to every playbook task"
+            style={{ width: 180 }}
+            disabled={isRunning}
+          />
+          <select
+            className="form-control"
+            value={workflowStartNodeId}
+            onChange={(e) => setWorkflowStartNodeId(e.target.value)}
+            title="Start workflow from this task"
+            style={{ width: 190 }}
+            disabled={isRunning}
+          >
+            <option value="">Start from beginning</option>
+            {selectedWf.nodes.map((node, index) => (
+              <option key={node.id} value={node.id}>
+                Start at {index + 1}: {node.label}
+              </option>
+            ))}
+          </select>
           <button
             className="btn btn-primary"
             onClick={handleRunWorkflow}
@@ -1302,6 +1383,7 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
                 title={`Drag ${template.name} to the workflow canvas`}
               >
                 <GripVertical size={12} style={{ display: 'inline', marginRight: 5, verticalAlign: 'middle' }} />
+                <span style={{ marginRight: 6 }}>{template.type === 'terraform' ? '🏗️' : template.type === 'powershell' ? '🟦' : '📜'}</span>
                 {template.name}
               </div>
             ))}
@@ -2293,6 +2375,9 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
                       setNodeLabel('Manual Approval Gate');
                     } else if (val === 'notification') {
                       setNodeLabel('Webhook / Notification Alert');
+                      setWebhookUrl('');
+                    } else if (val === 'email') {
+                      setNodeLabel('Send Email Notification');
                     }
                   }}
                   className="form-control"
@@ -2300,6 +2385,7 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
                   <option value="playbook">Playbook Template Execution</option>
                   <option value="approval">Manual Approval Gate</option>
                   <option value="notification">Notification / Webhook Alert</option>
+                  <option value="email">Send Email</option>
                 </select>
               </div>
 
@@ -2379,6 +2465,54 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
                       </option>
                     ))}
                   </select>
+                </div>
+              )}
+
+              {nodeType === 'email' && (
+                <>
+                  <div>
+                    <label className="form-label">To (required)</label>
+                    <input className="form-control" required value={emailTo} onChange={(e) => setEmailTo(e.target.value)} placeholder="ops@example.com, owner@example.com" />
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                    <div>
+                      <label className="form-label">CC</label>
+                      <input className="form-control" value={emailCc} onChange={(e) => setEmailCc(e.target.value)} placeholder="team@example.com" />
+                    </div>
+                    <div>
+                      <label className="form-label">BCC</label>
+                      <input className="form-control" value={emailBcc} onChange={(e) => setEmailBcc(e.target.value)} placeholder="audit@example.com" />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="form-label">Reply-To</label>
+                    <input type="email" className="form-control" value={emailReplyTo} onChange={(e) => setEmailReplyTo(e.target.value)} placeholder="noreply@example.com" />
+                  </div>
+                  <div>
+                    <label className="form-label">Subject</label>
+                    <input className="form-control" required value={emailSubject} onChange={(e) => setEmailSubject(e.target.value)} />
+                  </div>
+                  <div>
+                    <label className="form-label">Mail Content</label>
+                    <textarea className="form-control" required rows={6} value={emailBody} onChange={(e) => setEmailBody(e.target.value)} placeholder="Write the email content..." />
+                  </div>
+                </>
+              )}
+
+              {nodeType === 'notification' && (
+                <div>
+                  <label className="form-label">Webhook Endpoint (required)</label>
+                  <input
+                    type="url"
+                    required
+                    className="form-control"
+                    value={webhookUrl}
+                    onChange={(e) => setWebhookUrl(e.target.value)}
+                    placeholder="https://example.com/hooks/automation"
+                  />
+                  <span style={{ display: 'block', marginTop: 5, fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                    The workflow will POST its execution event to this URL.
+                  </span>
                 </div>
               )}
 
@@ -2755,12 +2889,17 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
 
             {selectedNodeForHistory.executionHistory && selectedNodeForHistory.executionHistory.length > 0 ? (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                {latestNodeExecution && (
+                  <div style={{ padding: '10px 12px', borderRadius: 6, backgroundColor: 'var(--accent-primary-light)', color: 'var(--text-primary)', fontSize: '0.8rem' }}>
+                    Showing latest run from {new Date(latestNodeExecution.startedAt).toLocaleString()} with full output logs below.
+                  </div>
+                )}
                 {selectedNodeForHistory.executionHistory.map((execution) => (
-                  <div
+                    <div
                     key={execution.id}
                     style={{
                       padding: '16px',
-                      border: '1px solid var(--border-color)',
+                        border: `1px solid ${latestNodeExecution?.id === execution.id ? 'var(--accent-primary)' : 'var(--border-color)'}`,
                       borderRadius: 8,
                       backgroundColor: 'var(--bg-tertiary)'
                     }}
@@ -2779,6 +2918,7 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
                         <span style={{ fontWeight: 700, fontSize: '0.95rem', color: 'var(--text-primary)' }}>
                           {execution.status.toUpperCase()}
                         </span>
+                        {latestNodeExecution?.id === execution.id && <span className="badge badge-info">LATEST RUN</span>}
                       </div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.8rem', color: 'var(--text-muted)' }}>
                         <Clock size={14} />
@@ -2834,7 +2974,7 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
                           padding: '12px',
                           fontFamily: 'var(--font-mono)',
                           fontSize: '0.75rem',
-                          maxHeight: '120px',
+                          maxHeight: latestNodeExecution?.id === execution.id ? '320px' : '120px',
                           overflowY: 'auto'
                         }}
                       >

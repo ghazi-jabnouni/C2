@@ -10,7 +10,8 @@ import {
   XCircle,
   X,
   Sliders,
-  Sparkles
+  Sparkles,
+  Copy
 } from 'lucide-react';
 import type { TaskTemplate, Workflow, PendingRequest } from '../types';
 import { api } from '../services/api';
@@ -63,6 +64,23 @@ export const RequestCatalogPage: React.FC = () => {
   useEffect(() => {
     loadData();
   }, []);
+
+  const copyLaunchCommand = async (item: TaskTemplate | Workflow, itemType: 'template' | 'workflow') => {
+    const endpoint = itemType === 'template'
+      ? `/api/templates/${item.id}/run`
+      : `/api/workflows/${item.id}/run`;
+    const body = itemType === 'template'
+      ? { extraVars: {}, limit: 'all', triggeredBy: 'API' }
+      : { extraVars: {}, triggeredBy: 'API' };
+    const command = `curl -X POST "${endpoint}" -H "Content-Type: application/json" -H "Authorization: Bearer YOUR_API_TOKEN" -d '${JSON.stringify(body)}'`;
+
+    try {
+      await navigator.clipboard.writeText(command);
+      alert('Launch API command copied to clipboard.');
+    } catch (_) {
+      alert(command);
+    }
+  };
 
   const handleOpenTemplateRequest = (template: TaskTemplate) => {
     setRequestItemType('template');
@@ -214,8 +232,16 @@ export const RequestCatalogPage: React.FC = () => {
                 <div key={tmpl.id} className="glass-panel" style={{ padding: '20px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: 14 }}>
                   <div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
-                      <span className={`badge ${tmpl.type === 'terraform' ? 'badge-running' : 'badge-info'}`} style={{ fontSize: '0.68rem', textTransform: 'uppercase' }}>
-                        {tmpl.type || 'ansible'}
+                      <span
+                        className="badge"
+                        style={{
+                          fontSize: '0.68rem',
+                          textTransform: 'uppercase',
+                          backgroundColor: tmpl.type === 'terraform' ? 'rgba(147, 51, 234, 0.15)' : tmpl.type === 'powershell' ? 'rgba(14, 165, 233, 0.15)' : 'rgba(239, 68, 68, 0.15)',
+                          color: tmpl.type === 'terraform' ? '#a855f7' : tmpl.type === 'powershell' ? '#0ea5e9' : '#ef4444'
+                        }}
+                      >
+                        {tmpl.type === 'terraform' ? '🏗️ Terraform' : tmpl.type === 'powershell' ? '🟦 PowerShell' : '📜 Ansible'}
                       </span>
                       <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
                         {tmpl.playbook}
@@ -231,14 +257,24 @@ export const RequestCatalogPage: React.FC = () => {
                     </p>
                   </div>
 
-                  <button
-                    className="btn btn-primary"
-                    onClick={() => handleOpenTemplateRequest(tmpl)}
-                    style={{ width: '100%', justifyContent: 'center' }}
-                  >
-                    <Send size={14} />
-                    <span>Request Execution</span>
-                  </button>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button
+                      className="btn btn-primary"
+                      onClick={() => handleOpenTemplateRequest(tmpl)}
+                      style={{ flex: 1, justifyContent: 'center' }}
+                    >
+                      <Send size={14} />
+                      <span>Request Execution</span>
+                    </button>
+                    <button
+                      className="btn btn-secondary"
+                      onClick={() => copyLaunchCommand(tmpl, 'template')}
+                      title="Copy template launch API"
+                      aria-label={`Copy launch API for ${tmpl.name}`}
+                    >
+                      <Copy size={14} />
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
@@ -274,14 +310,24 @@ export const RequestCatalogPage: React.FC = () => {
                     </p>
                   </div>
 
-                  <button
-                    className="btn btn-primary"
-                    onClick={() => handleOpenWorkflowRequest(wf)}
-                    style={{ width: '100%', justifyContent: 'center', backgroundColor: '#a855f7', borderColor: '#a855f7' }}
-                  >
-                    <Send size={14} fill="white" />
-                    <span>Request Workflow Execution</span>
-                  </button>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button
+                      className="btn btn-primary"
+                      onClick={() => handleOpenWorkflowRequest(wf)}
+                      style={{ flex: 1, justifyContent: 'center', backgroundColor: '#a855f7', borderColor: '#a855f7' }}
+                    >
+                      <Send size={14} fill="white" />
+                      <span>Request Workflow Execution</span>
+                    </button>
+                    <button
+                      className="btn btn-secondary"
+                      onClick={() => copyLaunchCommand(wf, 'workflow')}
+                      title="Copy workflow launch API"
+                      aria-label={`Copy launch API for ${wf.name}`}
+                    >
+                      <Copy size={14} />
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>

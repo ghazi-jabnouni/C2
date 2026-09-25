@@ -1,4 +1,42 @@
 import { WorkflowModel } from '../models/workflow.model.js';
+import nodemailer from 'nodemailer';
+
+function createMailTransport() {
+  const { SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_SECURE } = process.env;
+  if (!SMTP_HOST) throw new Error('SMTP is not configured. Set SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, and SMTP_FROM.');
+  return nodemailer.createTransport({
+    host: SMTP_HOST,
+    port: Number(SMTP_PORT || 587),
+    secure: SMTP_SECURE === 'true' || SMTP_SECURE === '1',
+    auth: SMTP_USER ? { user: SMTP_USER, pass: SMTP_PASS || '' } : undefined
+  });
+}
+
+async function sendWorkflowEmails(workflow, extraVars) {
+  const emailNodes = (workflow.nodes || []).filter((node) => node.type === 'email');
+  if (emailNodes.length === 0) return [];
+  const transport = createMailTransport();
+  const defaultFrom = process.env.SMTP_FROM || process.env.SMTP_USER;
+  const replaceVariables = (value) => String(value || '')
+    .replace(/\{\{\s*workflow_name\s*\}\}/g, workflow.name)
+    .replace(/\{\{\s*([\w.-]+)\s*\}\}/g, (_, key) => String(extraVars?.[key] ?? ''));
+
+  const results = [];
+  for (const node of emailNodes) {
+    if (!node.emailTo?.trim()) throw new Error(`Email node '${node.label}' has no recipient.`);
+    const info = await transport.sendMail({
+      from: node.emailFrom || defaultFrom,
+      to: replaceVariables(node.emailTo),
+      cc: replaceVariables(node.emailCc),
+      bcc: replaceVariables(node.emailBcc),
+      replyTo: replaceVariables(node.emailReplyTo),
+      subject: replaceVariables(node.emailSubject || workflow.name),
+      text: replaceVariables(node.emailBody || '')
+    });
+    results.push({ nodeId: node.id, messageId: info.messageId, accepted: info.accepted });
+  }
+  return results;
+}
 
 export const WorkflowController = {
   list: (req, res) => {
@@ -16,6 +54,28 @@ export const WorkflowController = {
       if (!updated) return res.status(404).json({ error: 'Workflow not found' });
       res.json(updated);
     } catch (err) { res.status(500).json({ error: err.message }); }
+  },
+  run: (req, res) => {
+    try {
+      const workflow = WorkflowModel.findById(req.params.id);
+      if (!workflow) return res.status(404).json({ error: 'Workflow not found' });
+      const extraVars = req.body?.extraVars || {};
+      sendWorkflowEmails(workflow, extraVars).then((emailResults) => {
+        res.status(202).json({
+          message: 'Workflow email steps accepted',
+          workflowId: workflow.id,
+          workflowName: workflow.name,
+          triggeredBy: req.body?.triggeredBy || 'API',
+          extraVars,
+          emailResults,
+          status: 'queued'
+        });
+      }).catch((err) => {
+        res.status(502).json({ error: err.message });
+      });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
   },
   remove: (req, res) => {
     try {

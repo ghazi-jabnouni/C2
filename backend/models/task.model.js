@@ -28,13 +28,18 @@ export const TaskModel = {
     const id = `task-${Date.now()}`;
     const now = new Date().toISOString();
     const stmt = db.prepare(`
-      INSERT INTO tasks (id, templateId, templateName, status, startedAt, finishedAt, duration, triggeredBy, inventoryName, playbook, extraVars, "limit", hostsStats, logs)
-      VALUES (?, ?, ?, 'running', ?, NULL, 'running...', ?, ?, ?, ?, ?, ?, '[]')
+      INSERT INTO tasks (id, templateId, templateName, type, provider, terraformAction, winrmPort, winrmUseSsl, status, startedAt, finishedAt, duration, triggeredBy, inventoryName, playbook, extraVars, "limit", hostsStats, logs)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'running', ?, NULL, 'running...', ?, ?, ?, ?, ?, ?, '[]')
     `);
     stmt.run(
       id,
       data.templateId,
       data.templateName || '',
+      data.type || 'ansible',
+      data.provider || 'aws',
+      data.terraformAction || 'apply',
+      data.winrmPort ? String(data.winrmPort) : '5985',
+      data.winrmUseSsl ? (data.winrmUseSsl === true || data.winrmUseSsl === '1' ? '1' : '0') : '0',
       now,
       data.triggeredBy || 'Operator',
       data.inventoryName || '',

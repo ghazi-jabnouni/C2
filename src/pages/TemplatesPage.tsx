@@ -14,7 +14,8 @@ import {
   Code2,
   Database,
   Trash2,
-  Edit2
+  Edit2,
+  Key
 } from 'lucide-react';
 import type {
   TaskTemplate,
@@ -29,6 +30,34 @@ import type {
 import { api } from '../services/api';
 import { TerminalLogViewer } from '../components/common/TerminalLogViewer';
 
+// Helper to parse individual hostnames, IPs, and groups from inventory INI/YAML content
+const parseInventoryHostList = (content?: string): { host: string; ip?: string; group?: string }[] => {
+  if (!content) return [];
+  const lines = content.split('\n');
+  const hosts: { host: string; ip?: string; group?: string }[] = [];
+  let currentGroup = 'all';
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith('#') || line.startsWith(';')) continue;
+    const groupMatch = line.match(/^\[([^\]]+)\]/);
+    if (groupMatch) {
+      currentGroup = groupMatch[1].trim();
+      continue;
+    }
+    const tokens = line.split(/\s+/);
+    const hostToken = tokens[0];
+    if (hostToken && !hostToken.includes('=') && !hostToken.startsWith('[')) {
+      const ipMatch = line.match(/ansible_host=([^\s]+)/);
+      hosts.push({
+        host: hostToken,
+        ip: ipMatch ? ipMatch[1] : undefined,
+        group: currentGroup
+      });
+    }
+  }
+  return hosts;
+};
+
 interface TemplatesPageProps {
   initialActiveTaskId?: string | null;
   initialDatabaseType?: string;
@@ -39,7 +68,6 @@ export const TemplatesPage: React.FC<TemplatesPageProps> = ({ initialActiveTaskI
   const [repositories, setRepositories] = useState<Repository[]>([]);
   const [inventories, setInventories] = useState<Inventory[]>([]);
   const [credentials, setCredentials] = useState<Credential[]>([]);
-  void credentials;
   const [environments, setEnvironments] = useState<Environment[]>([]);
   const [tasks, setTasks] = useState<TaskExecution[]>([]);
   const [databaseTypes, setDatabaseTypes] = useState<DatabaseTypeRecord[]>([]);
@@ -60,9 +88,12 @@ export const TemplatesPage: React.FC<TemplatesPageProps> = ({ initialActiveTaskI
   const [launchLimit, setLaunchLimit] = useState('');
 
   // New template form inputs
-  const [formType, setFormType] = useState<'ansible' | 'terraform'>('ansible');
+  const [formType, setFormType] = useState<'ansible' | 'terraform' | 'powershell'>('ansible');
   const [formProvider, setFormProvider] = useState<string>('aws');
   const [formTfAction, setFormTfAction] = useState<'plan' | 'apply' | 'destroy'>('apply');
+  const [formWinrmPort, setFormWinrmPort] = useState<number | string>('5985');
+  const [formWinrmUseSsl, setFormWinrmUseSsl] = useState<boolean>(false);
+  const [formCredId, setFormCredId] = useState<string>('');
   const [formName, setFormName] = useState('');
   const [formDesc, setFormDesc] = useState('');
   const [formDbType, setFormDbType] = useState<DatabaseType>('postgresql');
@@ -265,6 +296,9 @@ export const TemplatesPage: React.FC<TemplatesPageProps> = ({ initialActiveTaskI
     setFormType('ansible');
     setFormProvider('aws');
     setFormTfAction('apply');
+    setFormWinrmPort('5985');
+    setFormWinrmUseSsl(false);
+    setFormCredId(credentials[0]?.id || '');
     setFormName('');
     setFormDesc('');
     setFormDbType((databaseTypes[0]?.key || 'postgresql') as DatabaseType);
@@ -284,9 +318,12 @@ export const TemplatesPage: React.FC<TemplatesPageProps> = ({ initialActiveTaskI
       console.error('Failed to load repositories for template form:', error);
     }
     setEditingTemplateId(tmpl.id);
-    setFormType(tmpl.type || 'ansible');
+    setFormType((tmpl.type as any) || 'ansible');
     setFormProvider(tmpl.provider || 'aws');
     setFormTfAction(tmpl.terraformAction || 'apply');
+    setFormWinrmPort(tmpl.winrmPort || '5985');
+    setFormWinrmUseSsl(tmpl.winrmUseSsl === '1' || tmpl.winrmUseSsl === true);
+    setFormCredId(tmpl.credentialId || '');
     setFormName(tmpl.name);
     setFormDesc(tmpl.description || '');
     setFormDbType((tmpl.dbType || 'postgresql') as DatabaseType);
@@ -316,11 +353,14 @@ export const TemplatesPage: React.FC<TemplatesPageProps> = ({ initialActiveTaskI
   const handleCreateTemplate = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const payload = {
+      const payload: any = {
         name: formName,
         type: formType,
         provider: formType === 'terraform' ? formProvider : undefined,
         terraformAction: formType === 'terraform' ? formTfAction : undefined,
+        winrmPort: formType === 'powershell' ? formWinrmPort : undefined,
+        winrmUseSsl: formType === 'powershell' ? (formWinrmUseSsl ? '1' : '0') : undefined,
+        credentialId: formType === 'powershell' ? (formCredId || null) : undefined,
         description: formDesc,
         dbType: formDbType,
         repositoryId: formRepoId,
@@ -559,15 +599,15 @@ export const TemplatesPage: React.FC<TemplatesPageProps> = ({ initialActiveTaskI
                             fontWeight: 800,
                             padding: '2px 7px',
                             borderRadius: 6,
-                            backgroundColor: tmpl.type === 'terraform' ? 'rgba(147, 51, 234, 0.15)' : 'rgba(239, 68, 68, 0.15)',
-                            color: tmpl.type === 'terraform' ? '#a855f7' : '#ef4444',
-                            border: `1px solid ${tmpl.type === 'terraform' ? 'rgba(147, 51, 234, 0.3)' : 'rgba(239, 68, 68, 0.3)'}`,
+                            backgroundColor: tmpl.type === 'terraform' ? 'rgba(147, 51, 234, 0.15)' : tmpl.type === 'powershell' ? 'rgba(14, 165, 233, 0.15)' : 'rgba(239, 68, 68, 0.15)',
+                            color: tmpl.type === 'terraform' ? '#a855f7' : tmpl.type === 'powershell' ? '#0ea5e9' : '#ef4444',
+                            border: `1px solid ${tmpl.type === 'terraform' ? 'rgba(147, 51, 234, 0.3)' : tmpl.type === 'powershell' ? 'rgba(14, 165, 233, 0.3)' : 'rgba(239, 68, 68, 0.3)'}`,
                             display: 'inline-flex',
                             alignItems: 'center',
                             gap: 4
                           }}
                         >
-                          <span>{tmpl.type === 'terraform' ? '🏗️ Terraform' : '📜 Ansible'}</span>
+                          <span>{tmpl.type === 'terraform' ? '🏗️ Terraform' : tmpl.type === 'powershell' ? '🟦 PowerShell' : '📜 Ansible'}</span>
                         </span>
 
                         {/* Database Type Pill */}
@@ -630,7 +670,11 @@ export const TemplatesPage: React.FC<TemplatesPageProps> = ({ initialActiveTaskI
 
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: '0.75rem', color: 'var(--text-muted)' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                        <FolderGit2 size={13} style={{ color: 'var(--accent-primary)' }} />
+                        {tmpl.type === 'powershell' ? (
+                          <Terminal size={13} style={{ color: '#0ea5e9' }} />
+                        ) : (
+                          <FolderGit2 size={13} style={{ color: 'var(--accent-primary)' }} />
+                        )}
                         <span style={{ fontFamily: 'var(--font-mono)' }}>{tmpl.playbook}</span>
                       </div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -650,7 +694,7 @@ export const TemplatesPage: React.FC<TemplatesPageProps> = ({ initialActiveTaskI
                       }}
                     >
                       <span style={{ fontSize: '0.725rem', color: 'var(--text-muted)' }}>
-                        Target: <strong style={{ color: 'var(--text-primary)' }}>{tmpl.limit || 'all'}</strong>
+                        {tmpl.type === 'powershell' ? 'WinRM Server:' : 'Target:'} <strong style={{ color: 'var(--text-primary)' }}>{tmpl.limit || 'all'}</strong>
                       </span>
                       <div style={{ display: 'flex', gap: '8px' }}>
                         <button
@@ -1038,6 +1082,39 @@ export const TemplatesPage: React.FC<TemplatesPageProps> = ({ initialActiveTaskI
                   >
                     <span>🏗️ Terraform HCL</span>
                   </button>
+                  <button
+                    type="button"
+                    style={{
+                      flex: 1,
+                      padding: '10px 14px',
+                      borderRadius: 8,
+                      border: `1.5px solid ${formType === 'powershell' ? '#0ea5e9' : 'var(--border-color)'}`,
+                      backgroundColor: formType === 'powershell' ? 'rgba(14, 165, 233, 0.12)' : 'var(--bg-secondary)',
+                      color: formType === 'powershell' ? '#0ea5e9' : 'var(--text-secondary)',
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: 6
+                    }}
+                    onClick={() => {
+                      setFormType('powershell');
+                      if (!formPlaybook.endsWith('.ps1')) setFormPlaybook('scripts/run.ps1');
+                      if (formExtraVars.includes('backup_type') || formExtraVars.includes('version') || formExtraVars.includes('environment')) {
+                        setFormExtraVars('{\n  "Action": "HealthCheck",\n  "Force": true\n}');
+                      }
+                      const firstInv = inventories[0];
+                      const hostList = parseInventoryHostList(firstInv?.inventoryContent);
+                      if (hostList.length > 0) {
+                        setFormLimit(hostList[0].host);
+                      } else {
+                        setFormLimit('localhost');
+                      }
+                    }}
+                  >
+                    <span>🟦 PowerShell (WinRM)</span>
+                  </button>
                 </div>
               </div>
 
@@ -1170,6 +1247,220 @@ export const TemplatesPage: React.FC<TemplatesPageProps> = ({ initialActiveTaskI
                       style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }}
                       placeholder={'{\n  "aws_region": "us-east-1",\n  "instance_type": "t3.medium"\n}'}
                     />
+                  </div>
+                </>
+              ) : formType === 'powershell' ? (
+                <>
+                  {/* Template Name & Description */}
+                  <div>
+                    <label className="form-label">PowerShell Task Template Name *</label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="e.g. Windows Server IIS Restart & Health Check"
+                      value={formName}
+                      onChange={(e) => setFormName(e.target.value)}
+                      className="form-control"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="form-label">Description</label>
+                    <textarea
+                      rows={2}
+                      placeholder="Explain what this remote Windows PowerShell automation task accomplishes via WinRM..."
+                      value={formDesc}
+                      onChange={(e) => setFormDesc(e.target.value)}
+                      className="form-control"
+                    />
+                  </div>
+
+                  {/* Git Repository & PowerShell Script Name */}
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                    <div>
+                      <label className="form-label">
+                        <FolderGit2 size={13} style={{ display: 'inline', marginRight: 4 }} />
+                        Git Repository *
+                      </label>
+                      <select
+                        value={formRepoId}
+                        onChange={(e) => setFormRepoId(e.target.value)}
+                        className="form-control"
+                        required
+                      >
+                        <option value="">-- Select Git Repository --</option>
+                        {repositories.map((r) => (
+                          <option key={r.id} value={r.id}>
+                            {r.name} ({r.branch})
+                          </option>
+                        ))}
+                      </select>
+                      <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                        Cloned to retrieve the PowerShell script
+                      </span>
+                    </div>
+
+                    <div>
+                      <label className="form-label">
+                        <Terminal size={13} style={{ display: 'inline', marginRight: 4, color: '#0ea5e9' }} />
+                        PowerShell Script Name / Path (*.ps1) *
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        placeholder="e.g. scripts/deploy.ps1 or Check-Status.ps1"
+                        value={formPlaybook}
+                        onChange={(e) => setFormPlaybook(e.target.value)}
+                        className="form-control"
+                        style={{ fontFamily: 'var(--font-mono)', fontSize: '0.85rem' }}
+                      />
+                      <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                        Path to the .ps1 script file within the repository
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Target Inventory & Target Server (from Inventory) */}
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                    <div>
+                      <label className="form-label">
+                        <Server size={13} style={{ display: 'inline', marginRight: 4 }} />
+                        Target Inventory *
+                      </label>
+                      <select
+                        value={formInvId}
+                        onChange={(e) => {
+                          const newInvId = e.target.value;
+                          setFormInvId(newInvId);
+                          const chosenInv = inventories.find(i => i.id === newInvId);
+                          const parsedHosts = parseInventoryHostList(chosenInv?.inventoryContent);
+                          if (parsedHosts.length > 0) {
+                            setFormLimit(parsedHosts[0].host);
+                          }
+                        }}
+                        className="form-control"
+                        required
+                      >
+                        <option value="">-- Select Inventory --</option>
+                        {inventories.map((i) => (
+                          <option key={i.id} value={i.id}>
+                            {i.name} ({i.hostCount} hosts)
+                          </option>
+                        ))}
+                      </select>
+                      <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                        Inventory defining available Windows targets
+                      </span>
+                    </div>
+
+                    <div>
+                      <label className="form-label">
+                        <Sliders size={13} style={{ display: 'inline', marginRight: 4, color: '#10b981' }} />
+                        Connexion to which Server (from Inventory) *
+                      </label>
+                      {(() => {
+                        const currentInv = inventories.find(i => i.id === formInvId);
+                        const hostList = parseInventoryHostList(currentInv?.inventoryContent);
+                        return (
+                          <select
+                            value={formLimit}
+                            onChange={(e) => setFormLimit(e.target.value)}
+                            className="form-control"
+                            style={{ fontWeight: 600 }}
+                          >
+                            {hostList.length > 0 ? (
+                              <>
+                                <optgroup label="Inventory Servers">
+                                  {hostList.map((h, idx) => (
+                                    <option key={idx} value={h.host}>
+                                      🪟 {h.host} {h.ip ? `(${h.ip})` : ''} {h.group !== 'all' ? `[${h.group}]` : ''}
+                                    </option>
+                                  ))}
+                                </optgroup>
+                                <optgroup label="Batch Options">
+                                  <option value="all">🌐 All Inventory Servers</option>
+                                </optgroup>
+                              </>
+                            ) : (
+                              <>
+                                <option value="localhost">💻 localhost (Local Runspace)</option>
+                                <option value="127.0.0.1">💻 127.0.0.1</option>
+                                <option value="win-srv-01">🪟 win-srv-01.company.internal</option>
+                              </>
+                            )}
+                          </select>
+                        );
+                      })()}
+                      <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                        Windows target to connect via WinRM
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* WinRM Authentication & Port Configuration */}
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                    <div>
+                      <label className="form-label">
+                        <Key size={13} style={{ display: 'inline', marginRight: 4 }} />
+                        WinRM Credentials (AD / Local Admin)
+                      </label>
+                      <select
+                        value={formCredId}
+                        onChange={(e) => setFormCredId(e.target.value)}
+                        className="form-control"
+                      >
+                        <option value="">-- Default Host Admin / NTLM --</option>
+                        {credentials.map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {c.name} ({c.username || c.type})
+                          </option>
+                        ))}
+                      </select>
+                      <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                        Username and password used to authenticate WinRM
+                      </span>
+                    </div>
+
+                    <div>
+                      <label className="form-label">
+                        <Terminal size={13} style={{ display: 'inline', marginRight: 4 }} />
+                        WinRM Transport Protocol & Port
+                      </label>
+                      <select
+                        value={formWinrmPort}
+                        onChange={(e) => {
+                          const p = e.target.value;
+                          setFormWinrmPort(p);
+                          setFormWinrmUseSsl(p === '5986');
+                        }}
+                        className="form-control"
+                      >
+                        <option value="5985">HTTP Port 5985 (Default WinRM)</option>
+                        <option value="5986">HTTPS Port 5986 (Encrypted TLS)</option>
+                        <option value="443">HTTPS Port 443 (Reverse Proxy)</option>
+                      </select>
+                      <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                        Port 5985 for HTTP WS-Man or 5986 for HTTPS
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Script Arguments / Extra Variables */}
+                  <div>
+                    <label className="form-label">
+                      PowerShell Script Arguments & Parameters (JSON)
+                    </label>
+                    <textarea
+                      rows={3}
+                      value={formExtraVars}
+                      onChange={(e) => setFormExtraVars(e.target.value)}
+                      className="form-control"
+                      style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }}
+                      placeholder={'{\n  "ServiceName": "w3svc",\n  "Action": "Restart",\n  "Force": true\n}'}
+                    />
+                    <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                      Parameters passed to the remote PowerShell execution pipeline
+                    </span>
                   </div>
                 </>
               ) : (
@@ -1362,16 +1653,25 @@ export const TemplatesPage: React.FC<TemplatesPageProps> = ({ initialActiveTaskI
           <div className="modal-content animate-fade-in" style={{ padding: '24px', maxWidth: 540 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <div style={{ padding: 8, borderRadius: 8, backgroundColor: 'rgba(16, 185, 129, 0.12)', color: '#10b981' }}>
-                  <Play size={20} fill="#10b981" />
+                <div
+                  style={{
+                    padding: 8,
+                    borderRadius: 8,
+                    backgroundColor: templateToLaunch.type === 'powershell' ? 'rgba(14, 165, 233, 0.12)' : 'rgba(16, 185, 129, 0.12)',
+                    color: templateToLaunch.type === 'powershell' ? '#0ea5e9' : '#10b981'
+                  }}
+                >
+                  {templateToLaunch.type === 'powershell' ? <Terminal size={20} /> : <Play size={20} fill="#10b981" />}
                 </div>
                 <div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <span style={{ fontSize: '0.8rem' }}>{getDbBadge(templateToLaunch.dbType).icon}</span>
-                    <h3 style={{ fontSize: '1.15rem', fontWeight: 800 }}>Launch Database Task</h3>
+                    <span style={{ fontSize: '0.8rem' }}>{templateToLaunch.type === 'powershell' ? '🟦' : getDbBadge(templateToLaunch.dbType).icon}</span>
+                    <h3 style={{ fontSize: '1.15rem', fontWeight: 800 }}>
+                      {templateToLaunch.type === 'powershell' ? 'Launch PowerShell WinRM Task' : 'Launch Database Task'}
+                    </h3>
                   </div>
                   <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                    {templateToLaunch.name}
+                    {templateToLaunch.name} {templateToLaunch.type === 'powershell' ? `• Port ${templateToLaunch.winrmPort || '5985'}` : ''}
                   </span>
                 </div>
               </div>
@@ -1385,7 +1685,7 @@ export const TemplatesPage: React.FC<TemplatesPageProps> = ({ initialActiveTaskI
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
               <div>
-                <label className="form-label">Playbook Path</label>
+                <label className="form-label">{templateToLaunch.type === 'powershell' ? 'PowerShell Script (*.ps1)' : 'Playbook Path'}</label>
                 <div
                   style={{
                     padding: '8px 12px',
@@ -1393,26 +1693,83 @@ export const TemplatesPage: React.FC<TemplatesPageProps> = ({ initialActiveTaskI
                     backgroundColor: 'var(--bg-tertiary)',
                     fontFamily: 'var(--font-mono)',
                     fontSize: '0.825rem',
-                    color: 'var(--accent-primary)'
+                    color: templateToLaunch.type === 'powershell' ? '#0ea5e9' : 'var(--accent-primary)'
                   }}
                 >
                   {templateToLaunch.playbook}
                 </div>
               </div>
 
-              <div>
-                <label className="form-label">Target Host Limit Override</label>
-                <input
-                  type="text"
-                  value={launchLimit}
-                  onChange={(e) => setLaunchLimit(e.target.value)}
-                  className="form-control"
-                  placeholder="e.g. all, postgres_cluster, mssql-node-01"
-                />
-              </div>
+              {templateToLaunch.type === 'powershell' ? (
+                <div>
+                  <label className="form-label">
+                    <Server size={13} style={{ display: 'inline', marginRight: 4, color: '#0ea5e9' }} />
+                    Target Server (Select from Inventory) *
+                  </label>
+                  {(() => {
+                    const inv = inventories.find((i) => i.id === templateToLaunch.inventoryId);
+                    const hostList = parseInventoryHostList(inv?.inventoryContent);
+                    return (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                        <select
+                          value={launchLimit}
+                          onChange={(e) => setLaunchLimit(e.target.value)}
+                          className="form-control"
+                          style={{ fontWeight: 600 }}
+                        >
+                          {hostList.length > 0 ? (
+                            <>
+                              <optgroup label={`Servers in ${inv?.name || 'Inventory'}`}>
+                                {hostList.map((h, idx) => (
+                                  <option key={idx} value={h.host}>
+                                    🪟 {h.host} {h.ip ? `(${h.ip})` : ''} {h.group !== 'all' ? `[${h.group}]` : ''}
+                                  </option>
+                                ))}
+                              </optgroup>
+                              <optgroup label="Batch Targets">
+                                <option value="all">🌐 All Inventory Servers</option>
+                              </optgroup>
+                            </>
+                          ) : (
+                            <>
+                              <option value="localhost">💻 localhost (Local Runspace)</option>
+                              <option value="127.0.0.1">💻 127.0.0.1</option>
+                              <option value="win-srv-01">🪟 win-srv-01.company.internal</option>
+                            </>
+                          )}
+                        </select>
+                        <input
+                          type="text"
+                          value={launchLimit}
+                          onChange={(e) => setLaunchLimit(e.target.value)}
+                          className="form-control"
+                          placeholder="Or type custom hostname / IP..."
+                          style={{ fontSize: '0.8rem' }}
+                        />
+                      </div>
+                    );
+                  })()}
+                  <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                    Target node where WinRM will connect and run the PowerShell script
+                  </span>
+                </div>
+              ) : (
+                <div>
+                  <label className="form-label">Target Host Limit Override</label>
+                  <input
+                    type="text"
+                    value={launchLimit}
+                    onChange={(e) => setLaunchLimit(e.target.value)}
+                    className="form-control"
+                    placeholder="e.g. all, postgres_cluster, mssql-node-01"
+                  />
+                </div>
+              )}
 
               <div>
-                <label className="form-label">Runtime Extra Variables (JSON)</label>
+                <label className="form-label">
+                  {templateToLaunch.type === 'powershell' ? 'Script Parameters / Variables (JSON)' : 'Runtime Extra Variables (JSON)'}
+                </label>
                 <textarea
                   rows={4}
                   value={launchExtraVars}
@@ -1429,10 +1786,22 @@ export const TemplatesPage: React.FC<TemplatesPageProps> = ({ initialActiveTaskI
                 <button
                   className="btn btn-primary"
                   onClick={handleLaunchExecution}
-                  style={{ backgroundColor: '#10b981', borderColor: '#10b981' }}
+                  style={{
+                    backgroundColor: templateToLaunch.type === 'powershell' ? '#0284c7' : '#10b981',
+                    borderColor: templateToLaunch.type === 'powershell' ? '#0284c7' : '#10b981'
+                  }}
                 >
-                  <Play size={14} fill="white" />
-                  <span>Start Execution</span>
+                  {templateToLaunch.type === 'powershell' ? (
+                    <>
+                      <Terminal size={14} />
+                      <span>Connect & Run via WinRM</span>
+                    </>
+                  ) : (
+                    <>
+                      <Play size={14} fill="white" />
+                      <span>Start Execution</span>
+                    </>
+                  )}
                 </button>
               </div>
             </div>

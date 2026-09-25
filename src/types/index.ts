@@ -65,9 +65,11 @@ export interface DatabaseTypeRecord {
 export interface TaskTemplate {
   id: string;
   name: string;
-  type?: 'ansible' | 'terraform';
+  type?: 'ansible' | 'terraform' | 'powershell';
   provider?: string;
   terraformAction?: 'plan' | 'apply' | 'destroy';
+  winrmPort?: number | string;
+  winrmUseSsl?: boolean | string;
   description: string;
   dbType?: DatabaseType;
   repositoryId: string;
@@ -90,9 +92,11 @@ export interface TaskExecution {
   id: string;
   templateId: string;
   templateName: string;
-  type?: 'ansible' | 'terraform';
+  type?: 'ansible' | 'terraform' | 'powershell';
   provider?: string;
   terraformAction?: 'plan' | 'apply' | 'destroy';
+  winrmPort?: number | string;
+  winrmUseSsl?: boolean | string;
   status: 'running' | 'success' | 'failed' | 'cancelled';
   startedAt: string;
   finishedAt: string | null;
@@ -154,11 +158,17 @@ export interface ApiToken {
 
 export interface WorkflowNode {
   id: string;
-  type: 'start' | 'playbook' | 'approval' | 'notification' | 'hook' | 'end';
+  type: 'start' | 'playbook' | 'approval' | 'notification' | 'email' | 'hook' | 'end';
   templateId?: string;
   label: string;
   playbook?: string;
   hookUrl?: string;
+  emailTo?: string;
+  emailCc?: string;
+  emailBcc?: string;
+  emailReplyTo?: string;
+  emailSubject?: string;
+  emailBody?: string;
   approvalMessage?: string;
   approvalDecision?: 'yes' | 'no';
   yesTargetNodeId?: string;

@@ -13,9 +13,9 @@ export const InventoryController = {
 
   create: (req, res) => {
     try {
-      const { name, type, inventoryContent, fileName, credentialId } = req.body;
+      const { name, type, connectionType, inventoryContent, fileName, credentialId } = req.body;
       if (!name) return res.status(400).json({ error: 'Name is required' });
-      const created = InventoryModel.create({ name, type, inventoryContent, fileName, credentialId });
+      const created = InventoryModel.create({ name, type, connectionType, inventoryContent, fileName, credentialId });
       res.status(201).json(created);
     } catch (err) {
       console.error(err);

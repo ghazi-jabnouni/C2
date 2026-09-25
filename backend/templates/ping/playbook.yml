@@ -1,0 +1,8 @@
+# Ansible Playbook for ping
+- name: Execute ping Playbook (postgresql)
+  hosts: all
+  gather_facts: yes
+  tasks:
+    - name: Verify database engine connectivity
+      debug:
+        msg: "Running playbook test.yml on {{ inventory_hostname }}"
