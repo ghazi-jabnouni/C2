@@ -1,8 +1,61 @@
 import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
 import { config } from '../config/server.config.js';
+import os from 'node:os';
+import fs from 'node:fs';
+import path from 'node:path';
+import { TaskModel } from '../models/task.model.js';
 
 const execAsync = promisify(exec);
+
+function directorySize(directory) {
+  if (!fs.existsSync(directory)) return { bytes: 0, files: 0 };
+  let bytes = 0;
+  let files = 0;
+  const walk = (current) => {
+    for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+      const fullPath = path.join(current, entry.name);
+      try {
+        if (entry.isDirectory()) walk(fullPath);
+        else { bytes += fs.statSync(fullPath).size; files += 1; }
+      } catch (_) {}
+    }
+  };
+  try { walk(directory); } catch (_) {}
+  return { bytes, files };
+}
+
+function diskUsage() {
+  return new Promise((resolve) => {
+    const command = process.platform === 'win32'
+      ? 'powershell -NoProfile -Command "Get-CimInstance Win32_LogicalDisk -Filter \'DeviceID=\\\"$((Get-Location).Path.Substring(0,1)):\\\"\' | Select-Object -First 1 Size,FreeSpace | ConvertTo-Json -Compress"'
+      : 'df -Pk . | tail -1';
+    execAsync(command, { timeout: 5000 }).then(({ stdout }) => {
+      if (process.platform === 'win32') {
+        const parsed = JSON.parse(stdout);
+        const totalBytes = Number(parsed.Size || 0);
+        const freeBytes = Number(parsed.FreeSpace || 0);
+        return resolve({ totalBytes, freeBytes, usedBytes: Math.max(0, totalBytes - freeBytes) });
+      }
+      const parts = stdout.trim().split(/\s+/);
+      const totalBytes = Number(parts[1] || 0) * 1024;
+      const usedBytes = Number(parts[2] || 0) * 1024;
+      resolve({ totalBytes, freeBytes: Math.max(0, totalBytes - usedBytes), usedBytes });
+    }).catch(() => resolve({ totalBytes: 0, freeBytes: 0, usedBytes: 0 }));
+  });
+}
+
+function cpuPercent() {
+  const start = os.cpus();
+  const startIdle = start.reduce((sum, cpu) => sum + cpu.times.idle, 0);
+  const startTotal = start.reduce((sum, cpu) => sum + Object.values(cpu.times).reduce((a, value) => a + value, 0), 0);
+  return new Promise((resolve) => setTimeout(() => {
+    const end = os.cpus();
+    const idle = end.reduce((sum, cpu) => sum + cpu.times.idle, 0) - startIdle;
+    const total = end.reduce((sum, cpu) => sum + Object.values(cpu.times).reduce((a, value) => a + value, 0), 0) - startTotal;
+    resolve(total ? Math.round((1 - idle / total) * 100) : 0);
+  }, 100));
+}
 
 /**
  * Run a shell command and return stdout, or an error string.
@@ -17,6 +70,29 @@ async function run(cmd) {
 }
 
 export const SystemInfoController = {
+
+  performance: async (req, res) => {
+    try {
+      const [cpu, disk] = await Promise.all([cpuPercent(), diskUsage()]);
+      const root = path.resolve(process.cwd());
+      const templates = directorySize(path.join(root, 'backend', 'templates'));
+      const workspaces = directorySize(path.join(root, 'backend', 'workspaces'));
+      const memoryTotal = os.totalmem();
+      const memoryFree = os.freemem();
+      const runningTasks = TaskModel.findAll().filter((task) => task.status === 'running');
+      res.json({
+        collectedAt: new Date().toISOString(),
+        cpuPercent: cpu,
+        memory: { totalBytes: memoryTotal, freeBytes: memoryFree, usedBytes: memoryTotal - memoryFree, percent: Math.round(((memoryTotal - memoryFree) / memoryTotal) * 100) },
+        process: { rssBytes: process.memoryUsage().rss, heapUsedBytes: process.memoryUsage().heapUsed, uptimeSeconds: Math.floor(process.uptime()) },
+        disk,
+        runningTasks,
+        storage: { templates, workspaces }
+      });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  },
 
   /**
    * GET /api/system-info

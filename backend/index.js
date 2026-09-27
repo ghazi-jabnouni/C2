@@ -50,6 +50,9 @@ app.use((req, res, next) => {
 
 console.log('📦 Step 5: Loading routes...');
 
+let scheduleRunner;
+let runtimeSettingsService;
+
 try {
   const { default: authRoutes } = await import('./routes/auth.routes.js');
   const { default: webhookRoutes } = await import('./routes/webhook.routes.js');
@@ -64,9 +67,15 @@ try {
   const { default: templateRoutes } = await import('./routes/template.routes.js');
   const { default: taskRoutes } = await import('./routes/task.routes.js');
   const { default: scheduleRoutes } = await import('./routes/schedule.routes.js');
+  const { ScheduleRunner } = await import('./services/schedule-runner.js');
+  scheduleRunner = ScheduleRunner;
   const { default: pendingRequestRoutes } = await import('./routes/pending-request.routes.js');
   const { default: dashboardRoutes } = await import('./routes/dashboard.routes.js');
   const { default: systemInfoRoutes } = await import('./routes/system-info.routes.js');
+  const { default: mailSettingsRoutes } = await import('./routes/mail-settings.routes.js');
+  const { default: runtimeSettingsRoutes } = await import('./routes/runtime-settings.routes.js');
+  const { RuntimeSettingsService } = await import('./services/runtime-settings.service.js');
+  runtimeSettingsService = RuntimeSettingsService;
 
   app.use('/api/auth', authRoutes);
 
@@ -91,6 +100,8 @@ try {
   app.use('/api/pending-requests', pendingRequestRoutes);
   app.use('/api/dashboard', dashboardRoutes);
   app.use('/api/system-info', systemInfoRoutes);
+  app.use('/api/mail-settings', mailSettingsRoutes);
+  app.use('/api/runtime-settings', runtimeSettingsRoutes);
 
   // Sync dedicated template workspace folders on startup
   try {
@@ -100,6 +111,9 @@ try {
   } catch (e) {
     console.error('⚠️ Could not auto-sync template workspace directories:', e);
   }
+
+  scheduleRunner.initialize();
+  runtimeSettingsService.start();
 
   console.log('✅ Auth routes loaded');
   console.log('✅ User routes loaded');
@@ -152,6 +166,9 @@ const server = app.listen(config.port, config.host, () => {
   console.log(`👤 Users: http://${config.host}:${config.port}/api/users`);
   console.log('========================================');
 });
+
+server.on('close', () => scheduleRunner?.stopAll());
+server.on('close', () => runtimeSettingsService?.stop());
 
 // Setup WebSocket Server for Live Log Streaming & proxy support
 const wss = new WebSocketServer({ server, path: '/ws' });

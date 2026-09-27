@@ -10,9 +10,12 @@ import type {
   PendingRequest,
   ApiToken,
   Workflow,
+  MailSettings,
+  RuntimeSettings,
   User,
   DatabaseTypeRecord,
-  SystemInfo
+  SystemInfo,
+  SystemPerformance
 } from '../types';
 
 const API_BASE = '/api';
@@ -183,6 +186,33 @@ export const api = {
     fetchJson<Workflow>('/workflows', { method: 'POST', body: JSON.stringify(data) }),
   updateWorkflow: (id: string, data: Partial<Workflow>) =>
     fetchJson<Workflow>(`/workflows/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  getMailSettings: () => fetchJson<MailSettings>('/mail-settings'),
+  saveMailSettings: (data: {
+    host: string;
+    port: number;
+    secure: boolean;
+    username: string;
+    fromAddress: string;
+    password?: string;
+  }) => fetchJson<MailSettings>('/mail-settings', { method: 'PUT', body: JSON.stringify(data) }),
+  sendMailTest: (to: string) =>
+    fetchJson<{ message: string; messageId: string }>('/mail-settings/test', {
+      method: 'POST',
+      body: JSON.stringify({ to })
+    }),
+  getRuntimeSettings: () => fetchJson<RuntimeSettings>('/runtime-settings'),
+  saveRuntimeSettings: (data: RuntimeSettings) =>
+    fetchJson<RuntimeSettings>('/runtime-settings', { method: 'PUT', body: JSON.stringify(data) }),
+  sendWorkflowEmailNode: (workflowId: string, nodeId: string, extraVars: Record<string, unknown> = {}) =>
+    fetchJson<{ emailResults: Array<{ nodeId: string; messageId: string; accepted: string[] }> }>(
+      `/workflows/${workflowId}/nodes/${nodeId}/email`,
+      { method: 'POST', body: JSON.stringify({ extraVars }) }
+    ),
+  sendWorkflowWebhookNode: (workflowId: string, nodeId: string, variables: Record<string, unknown> = {}) =>
+    fetchJson<{ status: number; statusText: string; responseBody: string }>(
+      `/workflows/${workflowId}/nodes/${nodeId}/webhook`,
+      { method: 'POST', body: JSON.stringify({ variables }) }
+    ),
   submitWorkflowApproval: (workflowId: string, nodeId: string, decision: 'yes' | 'no') =>
     fetchJson<Workflow>(`/workflows/${workflowId}/approval/${nodeId}`, {
       method: 'POST',
@@ -202,5 +232,6 @@ export const api = {
 
   // System Info
   getSystemInfo: () => fetchJson<SystemInfo>('/system-info'),
+  getPerformance: () => fetchJson<SystemPerformance>('/system-info/performance'),
 };
 

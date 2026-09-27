@@ -8,12 +8,69 @@ import { InventoryModel } from '../models/inventory.model.js';
 import { RepositoryModel } from '../models/repository.model.js';
 import { EnvironmentModel } from '../models/environment.model.js';
 import { CredentialModel } from '../models/credential.model.js';
+import { RuntimeSettingsModel } from '../models/runtime-settings.model.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const workspacesDir = path.resolve(__dirname, '../workspaces');
 if (!fs.existsSync(workspacesDir)) {
   try { fs.mkdirSync(workspacesDir, { recursive: true }); } catch (_) {}
+}
+
+export function startTemplateExecution(templateId, options = {}) {
+  const tmpl = TemplateModel.findById(templateId);
+  if (!tmpl) return null;
+
+  const { maxConcurrentTasks } = RuntimeSettingsModel.get();
+  const runningTaskCount = TaskModel.countRunning();
+  if (runningTaskCount >= maxConcurrentTasks) {
+    const error = new Error(`Task concurrency limit reached (${maxConcurrentTasks}). Wait for a task to finish or increase the limit in Settings.`);
+    error.statusCode = 429;
+    throw error;
+  }
+
+  let inventoryName = '';
+  let inventoryContent = '';
+  let inventory = null;
+  if (tmpl.inventoryId) {
+    try {
+      inventory = InventoryModel.findById(tmpl.inventoryId);
+      if (inventory) {
+        inventoryName = inventory.name;
+        inventoryContent = inventory.inventoryContent || '';
+      }
+    } catch (_) {}
+  }
+
+  const limitOverride = options.limit || tmpl.limit || 'all';
+  const extraVars = options.extraVars === undefined
+    ? tmpl.extraVars || '{}'
+    : typeof options.extraVars === 'string'
+      ? options.extraVars
+      : JSON.stringify(options.extraVars || {});
+  const task = TaskModel.create({
+    templateId: tmpl.id,
+    templateName: tmpl.name,
+    type: tmpl.type || 'ansible',
+    provider: tmpl.provider || 'aws',
+    terraformAction: tmpl.terraformAction || 'apply',
+    winrmPort: tmpl.winrmPort || '5985',
+    winrmUseSsl: tmpl.winrmUseSsl || '0',
+    triggeredBy: options.triggeredBy || 'Operator',
+    inventoryName,
+    playbook: tmpl.playbook,
+    extraVars: extraVars || tmpl.extraVars || '{}',
+    limit: limitOverride
+  });
+
+  if (tmpl.type === 'terraform') {
+    simulateTerraformExecution(task.id, tmpl, limitOverride);
+  } else if (tmpl.type === 'powershell') {
+    executePowerShellWinRM(task.id, tmpl, inventory, inventoryContent, limitOverride);
+  } else {
+    executeAnsiblePlaybook(task.id, tmpl, inventory, inventoryContent, limitOverride);
+  }
+  return task;
 }
 
 export const TemplateController = {
@@ -72,58 +129,14 @@ export const TemplateController = {
     }
   },
 
-    run: (req, res) => {
+  run: (req, res) => {
     try {
-      const tmpl = TemplateModel.findById(req.params.id);
-      if (!tmpl) return res.status(404).json({ error: 'Template not found' });
-
-      // Resolve inventory name and content
-      let inventoryName = '';
-      let inventoryContent = '';
-      let inventory = null;
-      if (tmpl.inventoryId) {
-        try {
-          inventory = InventoryModel.findById(tmpl.inventoryId);
-          if (inventory) {
-            inventoryName = inventory.name;
-            inventoryContent = inventory.inventoryContent || '';
-          }
-        } catch (_) {}
-      }
-
-      const limitOverride = req.body?.limit || tmpl.limit || 'all';
-      const extraVars = typeof req.body?.extraVars === 'string'
-        ? req.body.extraVars
-        : JSON.stringify(req.body?.extraVars || {});
-
-      const task = TaskModel.create({
-        templateId: tmpl.id,
-        templateName: tmpl.name,
-        type: tmpl.type || 'ansible',
-        provider: tmpl.provider || 'aws',
-        terraformAction: tmpl.terraformAction || 'apply',
-        winrmPort: tmpl.winrmPort || '5985',
-        winrmUseSsl: tmpl.winrmUseSsl || '0',
-        triggeredBy: req.body?.triggeredBy || 'Operator',
-        inventoryName,
-        playbook: tmpl.playbook,
-        extraVars: extraVars || tmpl.extraVars || '{}',
-        limit: limitOverride
-      });
-
-      // Execute based on template type (Ansible, Terraform, or PowerShell WinRM)
-      if (tmpl.type === 'terraform') {
-        simulateTerraformExecution(task.id, tmpl, limitOverride);
-      } else if (tmpl.type === 'powershell') {
-        executePowerShellWinRM(task.id, tmpl, inventory, inventoryContent, limitOverride);
-      } else {
-        executeAnsiblePlaybook(task.id, tmpl, inventory, inventoryContent, limitOverride);
-      }
-
+      const task = startTemplateExecution(req.params.id, req.body || {});
+      if (!task) return res.status(404).json({ error: 'Template not found' });
       res.status(201).json(task);
     } catch (err) {
       console.error(err);
-      res.status(500).json({ error: 'Failed to run template' });
+      res.status(err.statusCode || 500).json({ error: err.message || 'Failed to run template' });
     }
   }
 };

@@ -1,21 +1,17 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
-  Terminal,
-  Box,
-  Cpu,
+  Activity,
   Package,
   RefreshCw,
   CheckCircle2,
   XCircle,
   Layers,
-  Server,
-  Clock,
   HardDrive,
   Info,
   ChevronRight
 } from 'lucide-react';
 import { api } from '../services/api';
-import type { SystemInfo, AnsibleCollection } from '../types';
+import type { SystemInfo, SystemPerformance, AnsibleCollection } from '../types';
 
 /* ──────────────────────────────────────────────────────────────────────────── */
 /* Helpers                                                                      */
@@ -30,6 +26,13 @@ function formatUptime(seconds: number): string {
   if (m > 0) parts.push(`${m}m`);
   parts.push(`${s}s`);
   return parts.join(' ');
+}
+
+function formatBytes(bytes: number): string {
+  if (!bytes) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  return `${(bytes / 1024 ** index).toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
 }
 
 /* ──────────────────────────────────────────────────────────────────────────── */
@@ -198,6 +201,7 @@ export const SystemInfoPage: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
   const [searchCollection, setSearchCollection] = useState('');
+  const [performance, setPerformance] = useState<SystemPerformance | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -215,6 +219,12 @@ export const SystemInfoPage: React.FC = () => {
 
   useEffect(() => {
     load();
+    const refreshPerformance = async () => {
+      try { setPerformance(await api.getPerformance()); } catch (_) {}
+    };
+    refreshPerformance();
+    const interval = setInterval(refreshPerformance, 3000);
+    return () => clearInterval(interval);
   }, [load]);
 
   const filteredCollections = (info?.collections ?? []).filter((c) =>
@@ -329,121 +339,81 @@ export const SystemInfoPage: React.FC = () => {
       {/* ── Main Grid ─────────────────────────────────────────── */}
       {info && (
         <>
-          {/* Top row: Ansible + Terraform + Platform */}
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fill, minmax(310px, 1fr))',
-              gap: 20,
-              marginBottom: 20,
-            }}
-          >
-            {/* Ansible Card */}
-            <Card title="Ansible" icon={<Terminal size={18} />} accentColor="#f97316">
-              <div style={{ paddingTop: 4 }}>
-                <div
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    paddingTop: 12,
-                    paddingBottom: 8,
-                  }}
-                >
-                  <span
-                    style={{
-                      fontSize: '2rem',
-                      fontWeight: 800,
-                      color: 'var(--text-primary)',
-                      fontFamily: "'JetBrains Mono', monospace",
-                      letterSpacing: '-0.03em',
-                    }}
-                  >
-                    {info.ansible.available ? info.ansible.version : '—'}
-                  </span>
-                  <StatusBadge available={info.ansible.available} />
-                </div>
-                <InfoRow label="Python version" value={info.ansible.pythonVersion} mono />
-                <InfoRow label="Config file" value={info.ansible.configFile ?? 'default'} mono />
-                <InfoRow label="Binary" value={info.ansible.rawFirstLine?.split('\n')[0] ?? '—'} />
+          {performance && (
+            <div style={{ marginBottom: 20 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 12, marginBottom: 12 }}>
+                {[
+                  ['CPU', `${performance.cpuPercent}%`, '#f97316'],
+                  ['RAM', `${performance.memory.percent}% · ${formatBytes(performance.memory.usedBytes)}`, '#06b6d4'],
+                  ['Disk', `${performance.disk.totalBytes ? Math.round((performance.disk.usedBytes / performance.disk.totalBytes) * 100) : 0}% · ${formatBytes(performance.disk.freeBytes)} free`, '#22c55e'],
+                  ['Running Tasks', String(performance.runningTasks.length), '#a855f7']
+                ].map(([label, value, color]) => (
+                  <div key={label} style={{ padding: '14px 16px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 10 }}>
+                    <div style={{ color: 'var(--text-muted)', fontSize: '0.72rem', textTransform: 'uppercase' }}>{label}</div>
+                    <strong style={{ display: 'block', marginTop: 6, color, fontSize: '1.1rem' }}>{value}</strong>
+                  </div>
+                ))}
               </div>
-            </Card>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 16 }}>
+                <Card title="Storage Usage" icon={<HardDrive size={18} />} accentColor="#22c55e">
+                  <div style={{ paddingTop: 12 }}>
+                    {[
+                      { label: 'Templates', data: performance.storage.templates, color: '#22c55e' },
+                      { label: 'Workspaces', data: performance.storage.workspaces, color: '#06b6d4' }
+                    ].map((item) => {
+                      const maxBytes = Math.max(performance.storage.templates.bytes, performance.storage.workspaces.bytes, 1);
+                      const width = Math.max(item.data.bytes ? 4 : 0, (item.data.bytes / maxBytes) * 100);
+                      return (
+                        <div key={item.label} style={{ marginBottom: 16 }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
+                            <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>{item.label}</span>
+                            <span style={{ fontSize: '0.78rem', color: 'var(--text-primary)', fontWeight: 700 }}>{formatBytes(item.data.bytes)} · {item.data.files} files</span>
+                          </div>
+                          <div style={{ height: 10, borderRadius: 999, background: 'var(--bg-tertiary)', overflow: 'hidden' }}>
+                            <div style={{ width: `${width}%`, height: '100%', borderRadius: 999, background: item.color, transition: 'width 0.4s ease' }} />
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div style={{ marginTop: 4, marginBottom: 14 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+                      <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Disk capacity</span>
+                      <span style={{ fontSize: '0.78rem', color: 'var(--text-primary)', fontWeight: 700 }}>{formatBytes(performance.disk.usedBytes)} used · {formatBytes(performance.disk.freeBytes)} free</span>
+                    </div>
+                    <div style={{ display: 'flex', height: 12, borderRadius: 999, background: 'var(--bg-tertiary)', overflow: 'hidden' }}>
+                      <div style={{ width: `${performance.disk.totalBytes ? (performance.disk.usedBytes / performance.disk.totalBytes) * 100 : 0}%`, background: '#f59e0b', transition: 'width 0.4s ease' }} />
+                      <div style={{ flex: 1, background: '#334155' }} />
+                    </div>
+                  </div>
+                  <InfoRow label="Disk total capacity" value={formatBytes(performance.disk.totalBytes)} />
+                  <InfoRow label="Workspace total usage" value={`${formatBytes(performance.storage.workspaces.bytes)} · ${performance.storage.workspaces.files} files`} />
+                  <InfoRow label="Node RSS" value={formatBytes(performance.process.rssBytes)} />
+                </Card>
+                <Card title="Running Tasks" icon={<Activity size={18} />} accentColor="#a855f7">
+                  {performance.runningTasks.length === 0 ? <InfoRow label="Status" value="No active tasks" /> : performance.runningTasks.map((task) => (
+                    <InfoRow key={task.id} label={task.templateName} value={`${task.id} · ${task.duration}`} mono />
+                  ))}
+                </Card>
+              </div>
+            </div>
+          )}
 
-            {/* Terraform Card */}
-            <Card title="Terraform" icon={<Box size={18} />} accentColor="#8b5cf6">
-              <div style={{ paddingTop: 4 }}>
-                <div
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    paddingTop: 12,
-                    paddingBottom: 8,
-                  }}
-                >
-                  <span
-                    style={{
-                      fontSize: '2rem',
-                      fontWeight: 800,
-                      color: 'var(--text-primary)',
-                      fontFamily: "'JetBrains Mono', monospace",
-                      letterSpacing: '-0.03em',
-                    }}
-                  >
-                    {info.terraform.available ? info.terraform.version : '—'}
-                  </span>
-                  <StatusBadge available={info.terraform.available} />
-                </div>
-                <InfoRow label="Provider" value="HashiCorp Terraform" />
-                <InfoRow label="Docs" value={
-                  <a
-                    href="https://developer.hashicorp.com/terraform"
-                    target="_blank"
-                    rel="noreferrer"
-                    style={{ color: '#8b5cf6', textDecoration: 'none', fontSize: '0.78rem' }}
-                  >
-                    developer.hashicorp.com ↗
-                  </a>
-                } />
-              </div>
-            </Card>
-
-            {/* Platform / Runtime Card */}
-            <Card title="Runtime Environment" icon={<Cpu size={18} />} accentColor="#06b6d4">
-              <div style={{ paddingTop: 4 }}>
-                <InfoRow label="Node.js" value={info.platform.nodeVersion} mono />
-                <InfoRow label="Python 3" value={info.platform.pythonVersion} mono />
-                <InfoRow label="Platform" value={`${info.platform.platform} / ${info.platform.arch}`} mono />
-                <InfoRow label="Kernel" value={info.platform.kernel || '—'} mono />
-                <InfoRow label="Hostname" value={info.platform.hostname} mono />
-              </div>
-            </Card>
-
-            {/* Process Stats Card */}
-            <Card title="Process Stats" icon={<Server size={18} />} accentColor="#22c55e">
-              <div style={{ paddingTop: 4 }}>
-                <InfoRow
-                  label="Uptime"
-                  value={
-                    <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-                      <Clock size={12} style={{ color: '#22c55e' }} />
-                      {formatUptime(info.platform.uptime)}
-                    </span>
-                  }
-                />
-                <InfoRow
-                  label="Memory (RSS)"
-                  value={
-                    <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-                      <HardDrive size={12} style={{ color: '#06b6d4' }} />
-                      {info.platform.memoryUsageMb} MB
-                    </span>
-                  }
-                />
-                <InfoRow label="Collections installed" value={info.collections.length} />
-                <InfoRow label="Engine" value="Node.js + SQLite" />
-              </div>
-            </Card>
+          {/* Runtime tools as a compact list */}
+          <div style={{ marginBottom: 20, borderTop: '1px solid var(--border-color)' }}>
+            <InfoRow label="Ansible" value={<span style={{ display: 'flex', alignItems: 'center', gap: 10 }}><strong style={{ color: '#f97316' }}>{info.ansible.available ? info.ansible.version : 'Not found'}</strong><StatusBadge available={info.ansible.available} /></span>} />
+            <InfoRow label="Ansible Python" value={info.ansible.pythonVersion} mono />
+            <InfoRow label="Ansible config" value={info.ansible.configFile ?? 'default'} mono />
+            <InfoRow label="Terraform" value={<span style={{ display: 'flex', alignItems: 'center', gap: 10 }}><strong style={{ color: '#8b5cf6' }}>{info.terraform.available ? info.terraform.version : 'Not found'}</strong><StatusBadge available={info.terraform.available} /></span>} />
+            <InfoRow label="Terraform provider" value="HashiCorp Terraform" />
+            <InfoRow label="Node.js" value={info.platform.nodeVersion} mono />
+            <InfoRow label="Python 3" value={info.platform.pythonVersion} mono />
+            <InfoRow label="Platform" value={`${info.platform.platform} / ${info.platform.arch}`} mono />
+            <InfoRow label="Kernel" value={info.platform.kernel || '—'} mono />
+            <InfoRow label="Hostname" value={info.platform.hostname} mono />
+            <InfoRow label="Process uptime" value={formatUptime(info.platform.uptime)} />
+            <InfoRow label="Process memory RSS" value={`${info.platform.memoryUsageMb} MB`} />
+            <InfoRow label="Installed collections" value={info.collections.length} />
           </div>
 
           {/* Collections Table */}

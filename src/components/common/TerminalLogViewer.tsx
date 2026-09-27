@@ -179,7 +179,7 @@ export const TerminalLogViewer: React.FC<TerminalLogViewerProps> = ({
 
   return (
     <div
-      className={`glass-panel animate-fade-in ${isFullScreen ? 'fullscreen-terminal' : ''}`}
+      className={`glass-panel terminal-log-container animate-fade-in ${isFullScreen ? 'fullscreen-terminal' : ''}`}
       style={{
         display: 'flex',
         flexDirection: 'column',
@@ -335,55 +335,6 @@ export const TerminalLogViewer: React.FC<TerminalLogViewerProps> = ({
             {isFullScreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
           </button>
         </div>
-      </div>
-
-      {/* Task Meta Sub-header */}
-      <div
-        style={{
-          backgroundColor: 'rgba(15, 23, 42, 0.65)',
-          padding: '8px 18px',
-          borderBottom: '1px solid var(--terminal-border)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          fontSize: '0.8rem',
-          color: '#94a3b8',
-          flexWrap: 'wrap',
-          gap: 12
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-          <span>
-            <strong style={{ color: '#cbd5e1' }}>Playbook:</strong> {currentTask.playbook}
-          </span>
-          <span>
-            <strong style={{ color: '#cbd5e1' }}>Inventory:</strong> {currentTask.inventoryName}
-          </span>
-          <span>
-            <strong style={{ color: '#cbd5e1' }}>Triggered by:</strong> {currentTask.triggeredBy}
-          </span>
-          <span>
-            <strong style={{ color: '#cbd5e1' }}>Duration:</strong> {currentTask.duration}
-          </span>
-        </div>
-
-        {/* Host Recap Stats Pill */}
-        {currentTask.hostsStats && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontFamily: 'var(--font-mono)' }}>
-            <span style={{ color: '#34d399', fontSize: '0.75rem' }}>
-              ok: {currentTask.hostsStats.ok}
-            </span>
-            <span style={{ color: '#fbbf24', fontSize: '0.75rem' }}>
-              changed: {currentTask.hostsStats.changed}
-            </span>
-            <span style={{ color: '#f87171', fontSize: '0.75rem' }}>
-              failed: {currentTask.hostsStats.failed}
-            </span>
-            <span style={{ color: '#94a3b8', fontSize: '0.75rem' }}>
-              unreachable: {currentTask.hostsStats.unreachable}
-            </span>
-          </div>
-        )}
       </div>
 
       {/* Terminal Output Area */}

@@ -8,6 +8,8 @@ const __dirname = path.dirname(__filename);
 const workspacesDir = path.resolve(__dirname, '../workspaces');
 
 export const TaskModel = {
+  countRunning: () => db.prepare("SELECT COUNT(*) AS count FROM tasks WHERE status = 'running'").get().count,
+
   findAll: (templateId) => {
     let rows;
     if (templateId) {
@@ -85,6 +87,12 @@ export const TaskModel = {
     }
     const result = db.prepare('DELETE FROM tasks WHERE id = ?').run(id);
     return result.changes > 0;
+  },
+
+  deleteFinishedBefore: (cutoff) => {
+    const expiredTasks = db.prepare("SELECT id FROM tasks WHERE startedAt < ? AND status != 'running'").all(cutoff);
+    expiredTasks.forEach((task) => TaskModel.delete(task.id));
+    return expiredTasks.length;
   },
 
   clearHistory: (templateId) => {

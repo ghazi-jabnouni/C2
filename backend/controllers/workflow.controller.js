@@ -1,22 +1,25 @@
 import { WorkflowModel } from '../models/workflow.model.js';
+import { MailSettingsModel } from '../models/mail-settings.model.js';
 import nodemailer from 'nodemailer';
 
-function createMailTransport() {
-  const { SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_SECURE } = process.env;
-  if (!SMTP_HOST) throw new Error('SMTP is not configured. Set SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, and SMTP_FROM.');
+function createMailTransport(settings) {
+  if (!settings.host) throw new Error('SMTP is not configured. Set it in Mail Settings.');
   return nodemailer.createTransport({
-    host: SMTP_HOST,
-    port: Number(SMTP_PORT || 587),
-    secure: SMTP_SECURE === 'true' || SMTP_SECURE === '1',
-    auth: SMTP_USER ? { user: SMTP_USER, pass: SMTP_PASS || '' } : undefined
+    host: settings.host,
+    port: settings.port,
+    secure: settings.secure,
+    auth: settings.username ? { user: settings.username, pass: settings.password || '' } : undefined
   });
 }
 
-async function sendWorkflowEmails(workflow, extraVars) {
-  const emailNodes = (workflow.nodes || []).filter((node) => node.type === 'email');
+async function sendWorkflowEmails(workflow, extraVars, nodeId) {
+  const allEmailNodes = (workflow.nodes || []).filter((node) => node.type === 'email');
+  const emailNodes = nodeId ? allEmailNodes.filter((node) => node.id === nodeId) : allEmailNodes;
+  if (nodeId && emailNodes.length === 0) throw new Error(`Email node '${nodeId}' was not found in this workflow.`);
   if (emailNodes.length === 0) return [];
-  const transport = createMailTransport();
-  const defaultFrom = process.env.SMTP_FROM || process.env.SMTP_USER;
+  const mailSettings = MailSettingsModel.getTransportSettings();
+  const transport = createMailTransport(mailSettings);
+  const defaultFrom = mailSettings.fromAddress || mailSettings.username;
   const replaceVariables = (value) => String(value || '')
     .replace(/\{\{\s*workflow_name\s*\}\}/g, workflow.name)
     .replace(/\{\{\s*([\w.-]+)\s*\}\}/g, (_, key) => String(extraVars?.[key] ?? ''));
@@ -36,6 +39,81 @@ async function sendWorkflowEmails(workflow, extraVars) {
     results.push({ nodeId: node.id, messageId: info.messageId, accepted: info.accepted });
   }
   return results;
+}
+
+function resolveWebhookValue(value, variables) {
+  return String(value).split('.').reduce((current, key) => current?.[key], variables);
+}
+
+function interpolateWebhookValue(value, variables) {
+  if (typeof value === 'string') {
+    const exactMatch = value.match(/^\{\{\s*([\w.-]+)\s*\}\}$/);
+    if (exactMatch) return resolveWebhookValue(exactMatch[1], variables) ?? '';
+    return value.replace(/\{\{\s*([\w.-]+)\s*\}\}/g, (_, key) => String(resolveWebhookValue(key, variables) ?? ''));
+  }
+  if (Array.isArray(value)) return value.map((item) => interpolateWebhookValue(item, variables));
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, interpolateWebhookValue(item, variables)]));
+  }
+  return value;
+}
+
+async function sendWorkflowWebhook(workflow, node, triggerVariables = {}) {
+  if (!node.hookUrl?.trim()) throw new Error(`Webhook node '${node.label}' has no URL.`);
+  const variables = {
+    ...triggerVariables,
+    variables: triggerVariables,
+    vars: triggerVariables,
+    workflow_name: workflow.name,
+    workflow_id: workflow.id,
+    node_id: node.id,
+    node_label: node.label,
+    status: triggerVariables.status || 'running'
+  };
+  const url = interpolateWebhookValue(node.hookUrl, variables);
+  const parsedUrl = new URL(url);
+  if (!['http:', 'https:'].includes(parsedUrl.protocol)) throw new Error('Webhook URL must use HTTP or HTTPS.');
+
+  let configuredHeaders = {};
+  try {
+    configuredHeaders = JSON.parse(node.webhookHeaders || '{}');
+  } catch {
+    throw new Error('Webhook headers must be valid JSON.');
+  }
+  if (!configuredHeaders || Array.isArray(configuredHeaders) || typeof configuredHeaders !== 'object') {
+    throw new Error('Webhook headers must be a JSON object.');
+  }
+  const headers = {};
+  for (const [key, value] of Object.entries(configuredHeaders)) {
+    if (typeof value !== 'string') throw new Error(`Webhook header '${key}' must have a string value.`);
+    headers[key] = interpolateWebhookValue(value, variables);
+  }
+
+  let body;
+  if (node.webhookBody?.trim()) {
+    let parsedBody;
+    try {
+      parsedBody = JSON.parse(node.webhookBody);
+    } catch {
+      throw new Error('Webhook body must be valid JSON.');
+    }
+    body = JSON.stringify(interpolateWebhookValue(parsedBody, variables));
+    if (!Object.keys(headers).some((key) => key.toLowerCase() === 'content-type')) {
+      headers['Content-Type'] = 'application/json';
+    }
+  }
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers,
+    body,
+    signal: AbortSignal.timeout(15000)
+  });
+  const responseBody = (await response.text()).slice(0, 1000);
+  if (!response.ok) {
+    throw new Error(`Webhook returned HTTP ${response.status}${responseBody ? `: ${responseBody}` : ''}`);
+  }
+  return { status: response.status, statusText: response.statusText, responseBody };
 }
 
 export const WorkflowController = {
@@ -75,6 +153,35 @@ export const WorkflowController = {
       });
     } catch (err) {
       res.status(500).json({ error: err.message });
+    }
+  },
+  sendEmailNode: (req, res) => {
+    try {
+      const workflow = WorkflowModel.findById(req.params.id);
+      if (!workflow) return res.status(404).json({ error: 'Workflow not found' });
+      const node = (workflow.nodes || []).find((item) => item.id === req.params.nodeId && item.type === 'email');
+      if (!node) return res.status(404).json({ error: 'Email node not found' });
+
+      sendWorkflowEmails(workflow, req.body?.extraVars || {}, node.id).then((emailResults) => {
+        res.json({ emailResults });
+      }).catch((err) => {
+        res.status(502).json({ error: err.message });
+      });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  },
+  sendWebhookNode: async (req, res) => {
+    try {
+      const workflow = WorkflowModel.findById(req.params.id);
+      if (!workflow) return res.status(404).json({ error: 'Workflow not found' });
+      const node = (workflow.nodes || []).find((item) => item.id === req.params.nodeId && item.type === 'notification');
+      if (!node) return res.status(404).json({ error: 'Webhook node not found' });
+      const variables = req.body?.variables && typeof req.body.variables === 'object' ? req.body.variables : {};
+      const result = await sendWorkflowWebhook(workflow, node, variables);
+      res.json(result);
+    } catch (err) {
+      res.status(502).json({ error: err.message });
     }
   },
   remove: (req, res) => {

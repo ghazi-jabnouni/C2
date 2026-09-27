@@ -227,56 +227,42 @@ export const RequestCatalogPage: React.FC = () => {
               <span className="badge badge-info">{templates.length} Available</span>
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 16 }}>
-              {templates.map((tmpl) => (
-                <div key={tmpl.id} className="glass-panel" style={{ padding: '20px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: 14 }}>
-                  <div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
-                      <span
-                        className="badge"
-                        style={{
-                          fontSize: '0.68rem',
-                          textTransform: 'uppercase',
-                          backgroundColor: tmpl.type === 'terraform' ? 'rgba(147, 51, 234, 0.15)' : tmpl.type === 'powershell' ? 'rgba(14, 165, 233, 0.15)' : 'rgba(239, 68, 68, 0.15)',
-                          color: tmpl.type === 'terraform' ? '#a855f7' : tmpl.type === 'powershell' ? '#0ea5e9' : '#ef4444'
-                        }}
-                      >
-                        {tmpl.type === 'terraform' ? '🏗️ Terraform' : tmpl.type === 'powershell' ? '🟦 PowerShell' : '📜 Ansible'}
-                      </span>
-                      <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
-                        {tmpl.playbook}
-                      </span>
-                    </div>
-
-                    <h4 style={{ fontSize: '1rem', fontWeight: 800, color: 'var(--text-primary)', marginBottom: 6 }}>
-                      {tmpl.name}
-                    </h4>
-
-                    <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
-                      {tmpl.description || 'No description available'}
-                    </p>
-                  </div>
-
-                  <div style={{ display: 'flex', gap: 8 }}>
-                    <button
-                      className="btn btn-primary"
-                      onClick={() => handleOpenTemplateRequest(tmpl)}
-                      style={{ flex: 1, justifyContent: 'center' }}
-                    >
-                      <Send size={14} />
-                      <span>Request Execution</span>
-                    </button>
-                    <button
-                      className="btn btn-secondary"
-                      onClick={() => copyLaunchCommand(tmpl, 'template')}
-                      title="Copy template launch API"
-                      aria-label={`Copy launch API for ${tmpl.name}`}
-                    >
-                      <Copy size={14} />
-                    </button>
-                  </div>
-                </div>
-              ))}
+            <div className="glass-panel" style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', minWidth: 760, borderCollapse: 'collapse', fontSize: '0.82rem' }}>
+                <thead>
+                  <tr style={{ borderBottom: '1px solid var(--border-color)', color: 'var(--text-muted)', textAlign: 'left' }}>
+                    <th style={{ padding: '11px 14px' }}>TEMPLATE</th>
+                    <th style={{ padding: '11px 14px' }}>TYPE</th>
+                    <th style={{ padding: '11px 14px' }}>PLAYBOOK</th>
+                    <th style={{ padding: '11px 14px' }}>DESCRIPTION</th>
+                    <th style={{ padding: '11px 14px', textAlign: 'right' }}>ACTIONS</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {templates.map((tmpl) => (
+                    <tr key={tmpl.id} style={{ borderBottom: '1px solid var(--border-color)', color: 'var(--text-primary)' }}>
+                      <td style={{ padding: '12px 14px', fontWeight: 700 }}>{tmpl.name}</td>
+                      <td style={{ padding: '12px 14px' }}>
+                        <span className="badge badge-info" style={{ textTransform: 'uppercase', fontSize: '0.67rem' }}>{tmpl.type}</span>
+                      </td>
+                      <td style={{ padding: '12px 14px', fontFamily: 'var(--font-mono)', fontSize: '0.75rem' }}>{tmpl.playbook}</td>
+                      <td style={{ padding: '12px 14px', color: 'var(--text-secondary)', maxWidth: 320 }}>{tmpl.description || 'No description available'}</td>
+                      <td style={{ padding: '8px 14px', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                        <div style={{ display: 'inline-flex', gap: 8 }}>
+                          <button className="btn btn-primary btn-sm" onClick={() => handleOpenTemplateRequest(tmpl)}>
+                            <Send size={13} />
+                            <span>Request</span>
+                          </button>
+                          <button className="btn btn-secondary btn-sm" onClick={() => copyLaunchCommand(tmpl, 'template')} title="Copy template launch API" aria-label={`Copy launch API for ${tmpl.name}`}>
+                            <Copy size={13} />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                  {templates.length === 0 && <tr><td colSpan={5} style={{ padding: 24, color: 'var(--text-muted)', textAlign: 'center' }}>No task templates are available.</td></tr>}
+                </tbody>
+              </table>
             </div>
           </div>
 
@@ -288,48 +274,38 @@ export const RequestCatalogPage: React.FC = () => {
               <span className="badge badge-running">{workflows.length} Available</span>
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 16 }}>
-              {workflows.map((wf) => (
-                <div key={wf.id} className="glass-panel" style={{ padding: '20px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: 14, borderColor: 'rgba(168, 85, 247, 0.4)' }}>
-                  <div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
-                      <span className="badge badge-running" style={{ fontSize: '0.68rem' }}>
-                        {wf.nodes.length} Stages Connected
-                      </span>
-                      <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
-                        DAG Pipeline
-                      </span>
-                    </div>
-
-                    <h4 style={{ fontSize: '1rem', fontWeight: 800, color: 'var(--text-primary)', marginBottom: 6 }}>
-                      {wf.name}
-                    </h4>
-
-                    <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
-                      {wf.description || 'Multi-stage automated pipeline diagram'}
-                    </p>
-                  </div>
-
-                  <div style={{ display: 'flex', gap: 8 }}>
-                    <button
-                      className="btn btn-primary"
-                      onClick={() => handleOpenWorkflowRequest(wf)}
-                      style={{ flex: 1, justifyContent: 'center', backgroundColor: '#a855f7', borderColor: '#a855f7' }}
-                    >
-                      <Send size={14} fill="white" />
-                      <span>Request Workflow Execution</span>
-                    </button>
-                    <button
-                      className="btn btn-secondary"
-                      onClick={() => copyLaunchCommand(wf, 'workflow')}
-                      title="Copy workflow launch API"
-                      aria-label={`Copy launch API for ${wf.name}`}
-                    >
-                      <Copy size={14} />
-                    </button>
-                  </div>
-                </div>
-              ))}
+            <div className="glass-panel" style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', minWidth: 700, borderCollapse: 'collapse', fontSize: '0.82rem' }}>
+                <thead>
+                  <tr style={{ borderBottom: '1px solid var(--border-color)', color: 'var(--text-muted)', textAlign: 'left' }}>
+                    <th style={{ padding: '11px 14px' }}>WORKFLOW</th>
+                    <th style={{ padding: '11px 14px' }}>STAGES</th>
+                    <th style={{ padding: '11px 14px' }}>DESCRIPTION</th>
+                    <th style={{ padding: '11px 14px', textAlign: 'right' }}>ACTIONS</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {workflows.map((wf) => (
+                    <tr key={wf.id} style={{ borderBottom: '1px solid var(--border-color)', color: 'var(--text-primary)' }}>
+                      <td style={{ padding: '12px 14px', fontWeight: 700 }}>{wf.name}</td>
+                      <td style={{ padding: '12px 14px', whiteSpace: 'nowrap' }}>{wf.nodes.length}</td>
+                      <td style={{ padding: '12px 14px', color: 'var(--text-secondary)', maxWidth: 360 }}>{wf.description || 'Multi-stage automated pipeline diagram'}</td>
+                      <td style={{ padding: '8px 14px', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                        <div style={{ display: 'inline-flex', gap: 8 }}>
+                          <button className="btn btn-primary btn-sm" onClick={() => handleOpenWorkflowRequest(wf)}>
+                            <Send size={13} />
+                            <span>Request</span>
+                          </button>
+                          <button className="btn btn-secondary btn-sm" onClick={() => copyLaunchCommand(wf, 'workflow')} title="Copy workflow launch API" aria-label={`Copy launch API for ${wf.name}`}>
+                            <Copy size={13} />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                  {workflows.length === 0 && <tr><td colSpan={4} style={{ padding: 24, color: 'var(--text-muted)', textAlign: 'center' }}>No workflows are available.</td></tr>}
+                </tbody>
+              </table>
             </div>
           </div>
         </div>
@@ -377,7 +353,7 @@ export const RequestCatalogPage: React.FC = () => {
                       )}
                     </td>
                     <td style={{ padding: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>
-                      {req.itemType === 'workflow' ? '🌐 ' : '📄 '}
+                      <span className="badge badge-secondary" style={{ marginRight: 8 }}>{req.itemType === 'workflow' ? 'Workflow' : 'Template'}</span>
                       {req.templateName}
                     </td>
                     <td style={{ padding: '12px', color: 'var(--text-secondary)' }}>

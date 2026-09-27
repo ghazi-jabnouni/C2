@@ -15,7 +15,8 @@ import {
   Database,
   Trash2,
   Edit2,
-  Key
+  Key,
+  RefreshCw
 } from 'lucide-react';
 import type {
   TaskTemplate,
@@ -76,6 +77,7 @@ export const TemplatesPage: React.FC<TemplatesPageProps> = ({ initialActiveTaskI
   const [selectedDbType, setSelectedDbType] = useState<string>(initialDatabaseType || 'all');
   const [selectedTemplate, setSelectedTemplate] = useState<TaskTemplate | null>(null);
   const [activeTask, setActiveTask] = useState<TaskExecution | null>(null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   // Modals
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -258,9 +260,45 @@ export const TemplatesPage: React.FC<TemplatesPageProps> = ({ initialActiveTaskI
     }
   };
 
+  const handleRefreshTasks = async () => {
+    setIsRefreshing(true);
+    try {
+      const [latestTasks, latestTemplates] = await Promise.all([
+        api.getAllTasks(),
+        api.getTemplates()
+      ]);
+      setTasks(latestTasks);
+      setTemplates(latestTemplates);
+      if (activeTask) {
+        const refreshedTask = latestTasks.find((task) => task.id === activeTask.id);
+        if (refreshedTask) setActiveTask(refreshedTask);
+      }
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
+
   useEffect(() => {
     loadData();
   }, []);
+
+  useEffect(() => {
+    if (!activeTask || activeTask.status !== 'running') return;
+
+    const refreshActiveTask = async () => {
+      try {
+        const latestTask = await api.getTask(activeTask.id);
+        setActiveTask(latestTask);
+        setTasks((current) => current.map((task) => task.id === latestTask.id ? latestTask : task));
+      } catch (error) {
+        console.error('Failed to refresh live task logs:', error);
+      }
+    };
+
+    const intervalId = window.setInterval(refreshActiveTask, 700);
+    refreshActiveTask();
+    return () => window.clearInterval(intervalId);
+  }, [activeTask?.id, activeTask?.status]);
 
   // When database type changes in new template form, auto-fill standard extraVars template
   const handleDbTypeChange = (db: DatabaseType) => {
@@ -481,11 +519,8 @@ export const TemplatesPage: React.FC<TemplatesPageProps> = ({ initialActiveTaskI
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 16 }}>
         <div>
           <h2 style={{ fontSize: '1.45rem', fontWeight: 800, color: 'var(--text-primary)' }}>
-            Database & Task Templates
+            Task Templates
           </h2>
-          <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
-            Automate database operations across MSSQL, Oracle, MySQL, PostgreSQL, Redis, MongoDB, and Core Infrastructure.
-          </p>
         </div>
 
         <button className="btn btn-primary" onClick={handleOpenCreateModal}>
@@ -494,79 +529,45 @@ export const TemplatesPage: React.FC<TemplatesPageProps> = ({ initialActiveTaskI
         </button>
       </div>
 
-      {/* Database Engine Division / Filter Tabs */}
-      <div
-        style={{
-          display: 'flex',
-          gap: 8,
-          overflowX: 'auto',
-          paddingBottom: 4,
-          borderBottom: '1px solid var(--border-color)'
-        }}
-      >
-        {dbCategories.map((cat) => {
-          const isActive = selectedDbType === cat.id;
-          const count = cat.id === 'all'
-            ? templates.length
-            : templates.filter((t) => t.dbType === cat.id).length;
-
-          return (
-            <button
-              key={cat.id}
-              onClick={() => setSelectedDbType(cat.id)}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
-                padding: '8px 14px',
-                borderRadius: 8,
-                backgroundColor: isActive ? cat.bg : 'var(--bg-secondary)',
-                border: `1px solid ${isActive ? cat.color : 'var(--border-color)'}`,
-                color: isActive ? cat.color : 'var(--text-secondary)',
-                fontWeight: isActive ? 700 : 500,
-                fontSize: '0.825rem',
-                cursor: 'pointer',
-                whiteSpace: 'nowrap',
-                transition: 'all 0.15s ease'
-              }}
-            >
-              <span>{cat.icon}</span>
-              <span>{cat.label}</span>
-              <span
-                style={{
-                  fontSize: '0.7rem',
-                  padding: '1px 6px',
-                  borderRadius: 999,
-                  backgroundColor: isActive ? 'rgba(0,0,0,0.1)' : 'var(--bg-tertiary)',
-                  color: 'inherit',
-                  fontWeight: 700
-                }}
-              >
-                {count}
-              </span>
-            </button>
-          );
-        })}
+      {/* Database engine filter */}
+      <div className="template-controls" style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'nowrap', width: '100%' }}>
+        <label htmlFor="template-db-filter" style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', fontWeight: 700, whiteSpace: 'nowrap' }}>
+          Template task
+        </label>
+        <select
+          id="template-db-filter"
+          className="form-control"
+          value={selectedDbType}
+          onChange={(e) => setSelectedDbType(e.target.value)}
+          style={{ height: 38, cursor: 'pointer' }}
+        >
+          {dbCategories.map((cat) => {
+            const count = cat.id === 'all' ? templates.length : templates.filter((t) => t.dbType === cat.id).length;
+            return (
+              <option key={cat.id} value={cat.id}>
+                {cat.icon} {cat.label} ({count})
+              </option>
+            );
+          })}
+        </select>
+        <div style={{ position: 'relative', flex: '0 1 440px', minWidth: 220 }}>
+          <Search size={15} style={{ position: 'absolute', left: 12, top: 12, color: 'var(--text-muted)' }} />
+          <input
+            type="text"
+            placeholder="Search templates..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="form-control"
+            style={{ paddingLeft: 36, height: 38 }}
+          />
+        </div>
       </div>
 
       {/* Main Grid: Template List + Details / Console */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(340px, 420px) 1fr', gap: 24 }}>
+      <div className="templates-workspace" style={{ display: 'grid', gridTemplateColumns: 'minmax(360px, 440px) 1fr', gap: 24 }}>
         {/* Left Column: Template Cards */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-          {/* Search bar */}
-          <div style={{ position: 'relative' }}>
-            <Search size={15} style={{ position: 'absolute', left: 12, top: 12, color: 'var(--text-muted)' }} />
-            <input
-              type="text"
-              placeholder="Search templates or playbooks..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="form-control"
-              style={{ paddingLeft: 36, height: 38 }}
-            />
-          </div>
-
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxHeight: '760px', overflowY: 'auto' }}>
+          <div className="template-list" style={{ display: 'flex', flexDirection: 'column', gap: 12, maxHeight: '760px', overflowY: 'auto' }}>
             {filteredTemplates.length === 0 ? (
               <div className="glass-panel" style={{ padding: 30, textAlign: 'center', color: 'var(--text-muted)' }}>
                 No templates found in this database category.
@@ -574,23 +575,23 @@ export const TemplatesPage: React.FC<TemplatesPageProps> = ({ initialActiveTaskI
             ) : (
               filteredTemplates.map((tmpl) => {
                 const isSelected = selectedTemplate?.id === tmpl.id;
-                const inv = inventories.find((i) => i.id === tmpl.inventoryId);
                 const dbBadge = getDbBadge(tmpl.dbType);
 
                 return (
                   <div
                     key={tmpl.id}
                     onClick={() => setSelectedTemplate(tmpl)}
-                    className="glass-panel"
+                    className={`glass-panel template-card${isSelected ? ' template-card-selected' : ''}`}
+                    aria-selected={isSelected}
                     style={{
                       padding: '16px 18px',
                       cursor: 'pointer',
                       borderColor: isSelected ? 'var(--accent-primary)' : 'var(--border-color)',
-                      backgroundColor: isSelected ? 'var(--accent-primary-light)' : 'var(--bg-secondary)',
+                      backgroundColor: isSelected ? 'var(--accent-primary-light)' : 'var(--bg-elevated)',
                       transition: 'all 0.15s ease'
                     }}
                   >
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                         {/* Automation Engine Type Pill */}
                         <span
@@ -645,12 +646,12 @@ export const TemplatesPage: React.FC<TemplatesPageProps> = ({ initialActiveTaskI
                         </span>
                       </div>
 
-                      <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                      <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
                         {tmpl.totalRuns || 0} runs
                       </span>
                     </div>
 
-                    <div style={{ fontWeight: 800, fontSize: '0.95rem', color: 'var(--text-primary)', marginTop: 8 }}>
+                    <div className="template-card-title" style={{ fontWeight: 800, fontSize: '0.95rem', color: 'var(--text-primary)', marginTop: 8 }}>
                       {tmpl.name}
                     </div>
 
@@ -668,81 +669,39 @@ export const TemplatesPage: React.FC<TemplatesPageProps> = ({ initialActiveTaskI
                       {tmpl.description || 'No description provided.'}
                     </p>
 
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                        {tmpl.type === 'powershell' ? (
-                          <Terminal size={13} style={{ color: '#0ea5e9' }} />
-                        ) : (
-                          <FolderGit2 size={13} style={{ color: 'var(--accent-primary)' }} />
-                        )}
-                        <span style={{ fontFamily: 'var(--font-mono)' }}>{tmpl.playbook}</span>
-                      </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                        <Server size={13} />
-                        <span>{inv?.name || 'Default Hosts'}</span>
-                      </div>
-                    </div>
-
                     <div
+                      className="template-card-footer"
                       style={{
                         marginTop: 12,
                         paddingTop: 10,
                         borderTop: '1px solid var(--border-color)',
                         display: 'flex',
                         alignItems: 'center',
-                        justifyContent: 'space-between'
+                        justifyContent: 'space-between',
+                        gap: 10,
+                        flexWrap: 'wrap'
                       }}
                     >
-                      <span style={{ fontSize: '0.725rem', color: 'var(--text-muted)' }}>
+                      <span style={{ fontSize: '0.725rem', color: 'var(--text-muted)', flex: '1 1 120px' }}>
                         {tmpl.type === 'powershell' ? 'WinRM Server:' : 'Target:'} <strong style={{ color: 'var(--text-primary)' }}>{tmpl.limit || 'all'}</strong>
                       </span>
-                      <div style={{ display: 'flex', gap: '8px' }}>
+                      <div className="template-card-actions" style={{ display: 'flex', gap: '8px' }}>
                         <button
                           className="btn btn-secondary btn-sm"
-                          style={{ padding: '6px 10px', display: 'flex', alignItems: 'center', gap: 4 }}
-                          onClick={(e) => {
+                          style={{ padding: '6px', display: 'flex', alignItems: 'center', gap: 4 }}
+                          onClick={async (e) => {
                             e.stopPropagation();
                             setSelectedTemplate(tmpl);
-                            const tmplTasks = tasks.filter((t) => t.templateId === tmpl.id);
-                            if (tmplTasks.length > 0) {
-                              setActiveTask(tmplTasks[0]);
-                            } else {
-                              const mockTask: TaskExecution = {
-                                id: `task-${Date.now()}`,
-                                templateId: tmpl.id,
-                                templateName: tmpl.name,
-                                status: 'success',
-                                startedAt: new Date().toISOString(),
-                                finishedAt: new Date().toISOString(),
-                                duration: '1m 20s',
-                                triggeredBy: 'Operator',
-                                inventoryName: inv?.name || 'Production Servers',
-                                playbook: tmpl.playbook,
-                                extraVars: tmpl.extraVars,
-                                limit: tmpl.limit,
-                                hostsStats: { ok: 8, changed: 2, unreachable: 0, failed: 0, skipped: 0 },
-                                logs: [
-                                  `TASK [Retrieve Playbook from Git Repository] ***`,
-                                  `ok: [localhost] => Playbook '${tmpl.playbook}' successfully retrieved from Git repository applied to template '${tmpl.name}'.`,
-                                  `PLAY [${tmpl.name}] ***`,
-                                  `TASK [Gathering Facts] ***`,
-                                  `ok: [node-01]`,
-                                  `ok: [node-02]`,
-                                  `TASK [Execute ${tmpl.playbook}] ***`,
-                                  `changed: [node-01] => {"msg": "Playbook completed successfully"}`,
-                                  `ok: [node-02]`,
-                                  `PLAY RECAP ***`,
-                                  `node-01: ok=3 changed=1 unreachable=0 failed=0 skipped=0`,
-                                  `node-02: ok=3 changed=0 unreachable=0 failed=0 skipped=0`
-                                ]
-                              };
-                              setActiveTask(mockTask);
+                            try {
+                              const tmplTasks = await api.getTasks(tmpl.id);
+                              setActiveTask(tmplTasks[0] || null);
+                            } catch (error) {
+                              alert(`Failed to load task logs: ${error}`);
                             }
                           }}
-                          title="View Terminal Execution Output"
+                          title="View latest real execution logs"
                         >
                           <Terminal size={12} />
-                          <span>View Logs</span>
                         </button>
                         <button
                           className="btn btn-secondary btn-sm"
@@ -752,6 +711,7 @@ export const TemplatesPage: React.FC<TemplatesPageProps> = ({ initialActiveTaskI
                             handleOpenEditModal(tmpl);
                           }}
                           title="Edit Template"
+                          aria-label={`Edit ${tmpl.name}`}
                         >
                           <Edit2 size={12} />
                         </button>
@@ -763,6 +723,7 @@ export const TemplatesPage: React.FC<TemplatesPageProps> = ({ initialActiveTaskI
                             handleDeleteTemplate(tmpl.id);
                           }}
                           title="Delete Template"
+                          aria-label={`Delete ${tmpl.name}`}
                         >
                           <Trash2 size={12} />
                         </button>
@@ -774,7 +735,7 @@ export const TemplatesPage: React.FC<TemplatesPageProps> = ({ initialActiveTaskI
                           }}
                         >
                           <Play size={12} fill="white" />
-                          <span>Run</span>
+                          <span>Launch</span>
                         </button>
                       </div>
                     </div>
@@ -789,57 +750,22 @@ export const TemplatesPage: React.FC<TemplatesPageProps> = ({ initialActiveTaskI
         <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
           {selectedTemplate ? (
             <>
-              {/* Dedicated Workspace Folder & Files Card */}
-              <div className="glass-panel" style={{ padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: 14 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                    <FolderGit2 size={20} style={{ color: 'var(--accent-primary)' }} />
-                    <div>
-                      <h4 style={{ fontSize: '1rem', fontWeight: 800 }}>
-                        Dedicated Template Workspace Directory
-                      </h4>
-                      <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: 2, fontFamily: 'var(--font-mono)' }}>
-                        {selectedTemplate.folderPath || `backend/templates/${selectedTemplate.id}-${selectedTemplate.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`}
-                      </div>
-                    </div>
-                  </div>
-                  <span className="badge badge-info" style={{ fontSize: '0.725rem' }}>
-                    ISOLATED WORKSPACE
-                  </span>
-                </div>
-
-                <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-                  This template runs from its own dedicated directory on disk containing the playbook file, engine inventory YAML, extra variables, and manifest config.
-                </div>
-
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 4 }}>
-                  {(selectedTemplate.folderFiles || ['playbook.yml', 'inventory.yml', 'vars.yml', 'env.json', 'template.json']).map((file) => (
-                    <div
-                      key={file}
-                      style={{
-                        padding: '6px 12px',
-                        borderRadius: 6,
-                        backgroundColor: 'var(--bg-tertiary)',
-                        border: '1px solid var(--border-color)',
-                        fontSize: '0.775rem',
-                        fontFamily: 'var(--font-mono)',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 6
-                      }}
-                    >
-                      <Code2 size={13} style={{ color: '#38bdf8' }} />
-                      <span>{file}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
               {/* Execution History Table for Selected Template */}
-              <div className="glass-panel" style={{ padding: '20px 24px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 }}>
-                  <History size={17} style={{ color: 'var(--accent-primary)' }} />
-                  <h4 style={{ fontSize: '0.95rem', fontWeight: 700 }}>Execution History ({templateHistoryTasks.length})</h4>
+              <div className="glass-panel template-history-panel" style={{ padding: '20px 24px', backgroundColor: 'var(--bg-elevated)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 14 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <History size={17} style={{ color: 'var(--accent-primary)' }} />
+                    <h4 style={{ fontSize: '0.95rem', fontWeight: 700 }}>Execution History ({templateHistoryTasks.length})</h4>
+                  </div>
+                  <button
+                    className="btn btn-secondary btn-sm"
+                    onClick={handleRefreshTasks}
+                    disabled={isRefreshing}
+                    title="Refresh task history and live logs"
+                  >
+                    <RefreshCw size={13} style={{ animation: isRefreshing ? 'spin 1s linear infinite' : 'none' }} />
+                    <span>Refresh</span>
+                  </button>
                 </div>
 
                 <div style={{ overflowX: 'auto' }}>
@@ -857,13 +783,13 @@ export const TemplatesPage: React.FC<TemplatesPageProps> = ({ initialActiveTaskI
                     </thead>
                     <tbody>
                       {templateHistoryTasks.map((t) => (
-                        <tr
-                          key={t.id}
-                          style={{
+                        <React.Fragment key={t.id}>
+                          <tr
+                            style={{
                             borderBottom: '1px solid var(--border-color)',
                             backgroundColor: activeTask?.id === t.id ? 'var(--accent-primary-light)' : 'transparent'
-                          }}
-                        >
+                            }}
+                          >
                           <td style={{ padding: '10px 12px' }}>
                             <span
                               className={`badge ${
@@ -909,94 +835,39 @@ export const TemplatesPage: React.FC<TemplatesPageProps> = ({ initialActiveTaskI
                               </button>
                             </div>
                           </td>
-                        </tr>
+                          </tr>
+                          {activeTask?.id === t.id && (
+                            <tr>
+                              <td colSpan={7} style={{ padding: 0, borderBottom: '1px solid var(--border-color)' }}>
+                                <div className="template-inline-logs">
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px', borderBottom: '1px solid var(--border-color)' }}>
+                                    <strong style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--text-primary)' }}>
+                                      <Terminal size={14} style={{ color: '#38bdf8' }} />
+                                      Logs · {t.id}
+                                    </strong>
+                                    <button className="btn btn-secondary btn-sm" onClick={() => setActiveTask(null)}>
+                                      <X size={13} /> Close
+                                    </button>
+                                  </div>
+                                  <TerminalLogViewer
+                                    task={activeTask}
+                                    onCancel={handleCancelTask}
+                                    onRerun={(tmplId) => {
+                                      const tmpl = templates.find((item) => item.id === tmplId);
+                                      if (tmpl) handleOpenLaunchModal(tmpl);
+                                    }}
+                                  />
+                                </div>
+                              </td>
+                            </tr>
+                          )}
+                        </React.Fragment>
                       ))}
                     </tbody>
                   </table>
                 </div>
               </div>
 
-              {/* Execution Output Console Modal Popup */}
-              {activeTask && (
-                <div className="modal-overlay">
-                  <div
-                    className="modal-content animate-fade-in"
-                    style={{
-                      maxWidth: '920px',
-                      width: '92%',
-                      maxHeight: '92vh',
-                    }}
-                  >
-                    {/* Sticky header — always visible even when content scrolls */}
-                    <div
-                      style={{
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                        padding: '16px 20px',
-                        borderBottom: '1px solid var(--border-color)',
-                        background: 'var(--bg-secondary)',
-                        flexShrink: 0,
-                      }}
-                    >
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                        <Terminal size={20} style={{ color: '#38bdf8' }} />
-                        <h3 style={{ fontSize: '1.15rem', fontWeight: 800, margin: 0 }}>
-                          Execution Output Console
-                        </h3>
-                        <span
-                          className={`badge ${
-                            activeTask.status === 'running'
-                              ? 'badge-running pulse-running'
-                              : activeTask.status === 'success'
-                              ? 'badge-success'
-                              : 'badge-danger'
-                          }`}
-                          style={{ fontSize: '0.7rem' }}
-                        >
-                          {activeTask.status.toUpperCase()}
-                        </span>
-                      </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                        <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
-                          {activeTask.id}
-                        </span>
-                        <button
-                          onClick={() => setActiveTask(null)}
-                          style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            width: 32,
-                            height: 32,
-                            borderRadius: 8,
-                            background: 'var(--bg-tertiary)',
-                            border: '1px solid var(--border-color)',
-                            color: 'var(--text-primary)',
-                            cursor: 'pointer',
-                            flexShrink: 0,
-                          }}
-                          title="Close"
-                        >
-                          <X size={18} />
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* Scrollable terminal body */}
-                    <div className="modal-body-scroll">
-                      <TerminalLogViewer
-                        task={activeTask}
-                        onCancel={handleCancelTask}
-                        onRerun={(tmplId) => {
-                          const tmpl = templates.find((t) => t.id === tmplId);
-                          if (tmpl) handleOpenLaunchModal(tmpl);
-                        }}
-                      />
-                    </div>
-                  </div>
-                </div>
-              )}
             </>
           ) : (
             <div className="glass-panel" style={{ padding: 40, textAlign: 'center', color: 'var(--text-muted)' }}>

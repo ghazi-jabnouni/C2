@@ -18,6 +18,7 @@ import { UsersPage } from './pages/UsersPage';
 import { DatabaseTypesPage } from './pages/DatabaseTypesPage';
 import { RequestCatalogPage } from './pages/RequestCatalogPage';
 import { SystemInfoPage } from './pages/SystemInfoPage';
+import { MailSettingsPage } from './pages/MailSettingsPage';
 import type { TaskTemplate, TaskExecution } from './types';
 
 export const AppContent: React.FC = () => {
@@ -147,6 +148,14 @@ export const AppContent: React.FC = () => {
         return <DatabaseTypesPage onOpenTemplates={(databaseType) => handleOpenTemplates(databaseType)} />;
       case 'system-info':
         return <SystemInfoPage />;
+      case 'settings':
+        return user?.role === 'Admin' ? <MailSettingsPage /> : (
+          <DashboardPage
+            onNavigate={(tab) => setCurrentTab(tab)}
+            onLaunchTemplate={handleLaunchTemplate}
+            onInspectTask={handleInspectTask}
+          />
+        );
       default:
         if (currentTab.startsWith('templates:')) {
           return <TemplatesPage initialActiveTaskId={focusTaskId} initialDatabaseType={currentTab.slice('templates:'.length)} />;

@@ -94,92 +94,53 @@ export const SchedulesPage: React.FC = () => {
         </button>
       </div>
 
-      {/* Schedules List Grid */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(380px, 1fr))', gap: 20 }}>
-        {schedules.map((sched) => (
-          <div key={sched.id} className="glass-panel" style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: 16 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                <div
-                  style={{
-                    width: 42,
-                    height: 42,
-                    borderRadius: 10,
-                    backgroundColor: sched.enabled ? 'rgba(16, 185, 129, 0.12)' : 'rgba(100, 116, 139, 0.12)',
-                    color: sched.enabled ? '#10b981' : '#94a3b8',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center'
-                  }}
-                >
-                  <CalendarClock size={22} />
-                </div>
-                <div>
-                  <h3 style={{ fontSize: '1.05rem', fontWeight: 800, color: 'var(--text-primary)' }}>
-                    {sched.templateName}
-                  </h3>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 3 }}>
-                    <span className={`badge ${sched.enabled ? 'badge-success' : 'badge-info'}`} style={{ fontSize: '0.65rem' }}>
-                      {sched.enabled ? 'ENABLED' : 'PAUSED'}
-                    </span>
+      {/* Schedules List */}
+      <div className="glass-panel" style={{ overflowX: 'auto' }}>
+        <table style={{ width: '100%', minWidth: 940, borderCollapse: 'collapse', fontSize: '0.82rem' }}>
+          <thead>
+            <tr style={{ borderBottom: '1px solid var(--border-color)', color: 'var(--text-muted)', textAlign: 'left' }}>
+              <th style={{ padding: '11px 14px' }}>TASK TEMPLATE</th>
+              <th style={{ padding: '11px 14px' }}>STATUS</th>
+              <th style={{ padding: '11px 14px' }}>CRON</th>
+              <th style={{ padding: '11px 14px' }}>SCHEDULE</th>
+              <th style={{ padding: '11px 14px' }}>LAST RUN</th>
+              <th style={{ padding: '11px 14px' }}>NEXT RUN (UTC)</th>
+              <th style={{ padding: '11px 14px', textAlign: 'right' }}>ACTIONS</th>
+            </tr>
+          </thead>
+          <tbody>
+            {schedules.map((sched) => (
+              <tr key={sched.id} style={{ borderBottom: '1px solid var(--border-color)', color: 'var(--text-primary)' }}>
+                <td style={{ padding: '12px 14px', fontWeight: 700 }}>{sched.templateName || sched.templateId}</td>
+                <td style={{ padding: '12px 14px' }}>
+                  <span className={`badge ${sched.enabled ? 'badge-success' : 'badge-info'}`}>
+                    {sched.enabled ? 'ENABLED' : 'PAUSED'}
+                  </span>
+                </td>
+                <td style={{ padding: '12px 14px', fontFamily: 'var(--font-mono)', fontWeight: 700, color: 'var(--accent-primary)', whiteSpace: 'nowrap' }}>{sched.cron}</td>
+                <td style={{ padding: '12px 14px', color: 'var(--text-secondary)' }}>{sched.cronHuman || 'Custom schedule'}</td>
+                <td style={{ padding: '12px 14px', whiteSpace: 'nowrap', color: 'var(--text-muted)' }}>{sched.lastRun ? new Date(sched.lastRun).toLocaleString() : 'Never'}</td>
+                <td style={{ padding: '12px 14px', whiteSpace: 'nowrap' }}>
+                  {sched.nextRun ? new Date(sched.nextRun).toLocaleString(undefined, { timeZone: 'UTC', timeZoneName: 'short' }) : sched.enabled ? 'Calculating...' : 'Paused'}
+                </td>
+                <td style={{ padding: '8px 14px', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                  <div style={{ display: 'inline-flex', gap: 8 }}>
+                    <button className="btn btn-secondary btn-sm" onClick={() => handleToggleEnable(sched)} title={sched.enabled ? 'Pause schedule' : 'Enable schedule'}>
+                      {sched.enabled ? <PauseCircle size={14} /> : <PlayCircle size={14} />}
+                      <span>{sched.enabled ? 'Pause' : 'Resume'}</span>
+                    </button>
+                    <button className="btn btn-secondary btn-sm" onClick={() => handleDelete(sched.id)} style={{ color: '#ef4444' }} title="Delete schedule" aria-label={`Delete schedule for ${sched.templateName}`}>
+                      <Trash2 size={14} />
+                    </button>
                   </div>
-                </div>
-              </div>
-
-              <div style={{ display: 'flex', gap: 6 }}>
-                <button
-                  className="btn btn-secondary btn-sm"
-                  onClick={() => handleToggleEnable(sched)}
-                  title={sched.enabled ? 'Pause schedule' : 'Enable schedule'}
-                >
-                  {sched.enabled ? <PauseCircle size={14} /> : <PlayCircle size={14} />}
-                  <span>{sched.enabled ? 'Pause' : 'Resume'}</span>
-                </button>
-                <button
-                  className="btn btn-secondary btn-sm"
-                  onClick={() => handleDelete(sched.id)}
-                  style={{ color: '#ef4444' }}
-                >
-                  <Trash2 size={14} />
-                </button>
-              </div>
-            </div>
-
-            {/* Cron Expression Card */}
-            <div
-              style={{
-                padding: '10px 14px',
-                borderRadius: 8,
-                backgroundColor: 'var(--bg-tertiary)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between'
-              }}
-            >
-              <div>
-                <span style={{ fontSize: '0.725rem', color: 'var(--text-muted)', display: 'block' }}>
-                  CRON SPECIFICATION
-                </span>
-                <code style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, color: 'var(--accent-primary)', fontSize: '0.9rem' }}>
-                  {sched.cron}
-                </code>
-              </div>
-              <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-                {sched.cronHuman}
-              </span>
-            </div>
-
-            {/* Next run metadata */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.775rem', color: 'var(--text-muted)' }}>
-              <span>
-                Last Run: <strong>{sched.lastRun ? new Date(sched.lastRun).toLocaleString() : 'Never'}</strong>
-              </span>
-              <span>
-                Next Run: <strong style={{ color: 'var(--text-primary)' }}>{new Date(sched.nextRun || Date.now()).toLocaleString()}</strong>
-              </span>
-            </div>
-          </div>
-        ))}
+                </td>
+              </tr>
+            ))}
+            {schedules.length === 0 && (
+              <tr><td colSpan={7} style={{ padding: 28, textAlign: 'center', color: 'var(--text-muted)' }}>No scheduled tasks yet.</td></tr>
+            )}
+          </tbody>
+        </table>
       </div>
 
       {/* Create Schedule Modal */}
@@ -219,7 +180,7 @@ export const SchedulesPage: React.FC = () => {
               </div>
 
               <div>
-                <label className="form-label">Cron Expression (Minute Hour DOM Month DOW) *</label>
+                <label className="form-label">Cron Expression (UTC: minute hour day month weekday) *</label>
                 <input
                   type="text"
                   required
@@ -229,6 +190,9 @@ export const SchedulesPage: React.FC = () => {
                   className="form-control"
                   style={{ fontFamily: 'var(--font-mono)' }}
                 />
+                <span style={{ display: 'block', marginTop: 6, color: 'var(--text-muted)', fontSize: '0.74rem', lineHeight: 1.5 }}>
+                  Examples: <code>0 2 * * *</code> daily at 02:00; <code>30 8 * * 1-5</code> weekdays at 08:30; <code>0 9 * * 1</code> Mondays at 09:00. Times are UTC.
+                </span>
               </div>
 
               <div>

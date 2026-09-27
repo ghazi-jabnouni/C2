@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useLayoutEffect } from 'react';
 import {
   Play,
   Plus,
@@ -19,10 +19,12 @@ import {
   ArrowRight,
   ShieldAlert,
   Bell,
+  Braces,
   Settings,
   ZoomIn,
   ZoomOut,
-  Maximize2
+  Maximize2,
+  Search
 } from 'lucide-react';
 import type { Workflow, WorkflowNode, WorkflowEdge, TaskTemplate, TaskExecution } from '../types';
 import { api } from '../services/api';
@@ -97,6 +99,14 @@ const getOrderedNodes = (nodes: WorkflowNode[], edges: WorkflowEdge[]): Workflow
   return result;
 };
 
+const parseWorkflowTriggerVariables = (value: string): Record<string, unknown> => {
+  const parsed: unknown = JSON.parse(value.trim() || '{}');
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('Trigger variables must be a JSON object.');
+  }
+  return parsed as Record<string, unknown>;
+};
+
 export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workflowId, onBack }) => {
   
   const [templates, setTemplates] = useState<TaskTemplate[]>([]);
@@ -104,6 +114,8 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
   const [isRunning, setIsRunning] = useState(false);
   const [workflowLimit, setWorkflowLimit] = useState('all');
   const [workflowStartNodeId, setWorkflowStartNodeId] = useState('');
+  const [workflowTriggerVariablesJson, setWorkflowTriggerVariablesJson] = useState('{}');
+  const [showWorkflowTriggerVariables, setShowWorkflowTriggerVariables] = useState(false);
   const [executionLogs, setExecutionLogs] = useState<string[]>([]);
   const [showAddNodeModal, setShowAddNodeModal] = useState(false);
   const [selectedNodeForHistory, setSelectedNodeForHistory] = useState<WorkflowNode | null>(null);
@@ -116,8 +128,10 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
   const [connectToNodeId, setConnectToNodeId] = useState<string>('');
   const [connectEdgeType, setConnectEdgeType] = useState<'success' | 'always' | 'failure'>('success');
 
-  // Overall Workflow Execution History Modal State
-  const [showWorkflowHistoryModal, setShowWorkflowHistoryModal] = useState(false);
+  // Workflow execution history page state
+  const [showWorkflowHistoryPage, setShowWorkflowHistoryPage] = useState(false);
+  const [workflowHistorySearch, setWorkflowHistorySearch] = useState('');
+  const [expandedWorkflowRunId, setExpandedWorkflowRunId] = useState<string | null>(null);
 
   // Mouse dragging state for diagram nodes in all directions (Up, Down, Left, Right)
   const [draggingNodeId, setDraggingNodeId] = useState<string | null>(null);
@@ -126,9 +140,25 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
 
   // Zoom Controls State & Actions
   const [zoom, setZoom] = useState<number>(1);
+  const canvasRef = React.useRef<HTMLDivElement>(null);
+  const nodeRefs = React.useRef(new Map<string, HTMLDivElement>());
+  const [nodeRects, setNodeRects] = useState<Record<string, { width: number; height: number }>>({});
   const handleZoomIn = () => setZoom((prev) => Math.min(2.2, Math.round((prev + 0.15) * 100) / 100));
   const handleZoomOut = () => setZoom((prev) => Math.max(0.4, Math.round((prev - 0.15) * 100) / 100));
   const handleResetZoom = () => setZoom(1);
+
+  useLayoutEffect(() => {
+    const measureNodes = () => {
+      const nextRects: Record<string, { width: number; height: number }> = {};
+      nodeRefs.current.forEach((element, nodeId) => {
+        nextRects[nodeId] = { width: element.offsetWidth, height: element.offsetHeight };
+      });
+      setNodeRects(nextRects);
+    };
+    measureNodes();
+    const frame = window.requestAnimationFrame(measureNodes);
+    return () => window.cancelAnimationFrame(frame);
+  }, [selectedWf?.nodes, zoom]);
 
   const handleCanvasWheel = (e: React.WheelEvent<HTMLDivElement>) => {
     if (e.ctrlKey || e.metaKey) {
@@ -155,6 +185,13 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
   const [emailSubject, setEmailSubject] = useState('Workflow notification');
   const [emailBody, setEmailBody] = useState('The workflow step completed.');
   const [webhookUrl, setWebhookUrl] = useState('');
+  const [webhookHeaders, setWebhookHeaders] = useState('{\n  "Content-Type": "application/json"\n}');
+  const [webhookBody, setWebhookBody] = useState('{\n  "workflow": "{{workflow_name}}",\n  "node": "{{node_label}}",\n  "status": "{{status}}"\n}');
+  const [pendingWebhookConnection, setPendingWebhookConnection] = useState<{
+    fromNodeId: string;
+    edgeType: 'success' | 'failure' | 'always';
+  } | null>(null);
+  const [editingWebhookNodeId, setEditingWebhookNodeId] = useState<string | null>(null);
 
   // Configuration Modal for existing Approval Gate
   const [configuringApprovalNode, setConfiguringApprovalNode] = useState<WorkflowNode | null>(null);
@@ -394,11 +431,37 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
       alert('Enter a webhook endpoint before adding this node.');
       return;
     }
+    if (nodeType === 'notification') {
+      try {
+        const headers = JSON.parse(webhookHeaders || '{}');
+        if (!headers || Array.isArray(headers) || typeof headers !== 'object') throw new Error();
+        if (webhookBody.trim()) JSON.parse(webhookBody);
+      } catch {
+        alert('Webhook headers and body must be valid JSON.');
+        return;
+      }
+    }
+    if (editingWebhookNodeId) {
+      const updated = {
+        ...selectedWf,
+        nodes: selectedWf.nodes.map((node) => node.id === editingWebhookNodeId
+          ? { ...node, label: nodeLabel || node.label, hookUrl: webhookUrl.trim(), webhookHeaders, webhookBody }
+          : node)
+      };
+      setSelectedWf(updated);
+      api.updateWorkflow(updated.id, updated).catch((error) => console.error('Failed to update webhook node:', error));
+      setShowAddNodeModal(false);
+      setEditingWebhookNodeId(null);
+      return;
+    }
     const tmpl = templates.find((t) => t.id === nodeTemplateId);
+    const webhookSource = pendingWebhookConnection
+      ? selectedWf.nodes.find((node) => node.id === pendingWebhookConnection.fromNodeId)
+      : undefined;
     const newNode: WorkflowNode = {
       id: `node-${Date.now()}`,
       type: nodeType,
-      label: nodeLabel || (nodeType === 'approval' ? 'Manual Approval Gate' : tmpl ? tmpl.name : 'Pipeline Step'),
+      label: nodeLabel || (nodeType === 'approval' ? 'Manual Approval Gate' : nodeType === 'notification' ? 'Webhook / Notification Alert' : tmpl ? tmpl.name : 'Pipeline Step'),
       approvalMessage: nodeType === 'approval' ? (nodeApprovalMessage || 'Require operator sign-off before proceeding') : undefined,
       emailTo: nodeType === 'email' ? emailTo.trim() : undefined,
       emailCc: nodeType === 'email' ? emailCc.trim() : undefined,
@@ -407,18 +470,27 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
       emailSubject: nodeType === 'email' ? emailSubject.trim() : undefined,
       emailBody: nodeType === 'email' ? emailBody : undefined,
       hookUrl: nodeType === 'notification' ? webhookUrl.trim() : undefined,
+      webhookHeaders: nodeType === 'notification' ? webhookHeaders : undefined,
+      webhookBody: nodeType === 'notification' ? webhookBody : undefined,
       yesTargetNodeId: nodeType === 'approval' && nodeYesTargetId ? nodeYesTargetId : undefined,
       noTargetNodeId: nodeType === 'approval' && nodeNoTargetId ? nodeNoTargetId : undefined,
       templateId: nodeType === 'playbook' ? nodeTemplateId : undefined,
       playbook: nodeType === 'playbook' && tmpl ? tmpl.playbook : undefined,
-      x: (selectedWf.nodes.length + 1) * 230,
-      y: 120,
+      x: webhookSource ? webhookSource.x + 280 : (selectedWf.nodes.length + 1) * 230,
+      y: webhookSource ? Math.max(50, webhookSource.y + 50) : 120,
       status: 'idle'
     };
 
     const prevNode = selectedWf.nodes[selectedWf.nodes.length - 1];
     const newEdges = [...selectedWf.edges];
-    if (prevNode) {
+    if (pendingWebhookConnection) {
+      newEdges.push({
+        id: `e-${Date.now()}`,
+        from: pendingWebhookConnection.fromNodeId,
+        to: newNode.id,
+        type: pendingWebhookConnection.edgeType
+      });
+    } else if (prevNode) {
       newEdges.push({
         id: `e-${Date.now()}`,
         from: prevNode.id,
@@ -458,6 +530,21 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
     setNodeLabel('');
     setNodeYesTargetId('');
     setNodeNoTargetId('');
+    setWebhookUrl('');
+    setWebhookHeaders('{\n  "Content-Type": "application/json"\n}');
+    setWebhookBody('{\n  "workflow": "{{workflow_name}}",\n  "node": "{{node_label}}",\n  "status": "{{status}}"\n}');
+    setPendingWebhookConnection(null);
+  };
+
+  const handleEditWebhookNode = (node: WorkflowNode) => {
+    setNodeType('notification');
+    setNodeLabel(node.label);
+    setWebhookUrl(node.hookUrl || '');
+    setWebhookHeaders(node.webhookHeaders || '{}');
+    setWebhookBody(node.webhookBody || '');
+    setEditingWebhookNodeId(node.id);
+    setPendingWebhookConnection(null);
+    setShowAddNodeModal(true);
   };
 
   const handleOpenConnectModal = (fromNodeId?: string, defaultType: 'success' | 'always' | 'failure' = 'success') => {
@@ -542,37 +629,17 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
     setShowConnectModal(false);
   };
 
-  const handleCreateAndConnectWebhookNode = async (fromNodeId: string, edgeType: 'success' | 'failure' | 'always') => {
-    if (!selectedWf) return;
-    const sourceNode = selectedWf.nodes.find(n => n.id === fromNodeId);
-    if (!sourceNode) return;
-
-    const yOffset = edgeType === 'failure' ? 140 : edgeType === 'success' ? -40 : 50;
-    const newNode: WorkflowNode = {
-      id: `node-${Date.now()}`,
-      type: 'notification',
-      label: 'Webhook / Slack Alert',
-      hookUrl: 'https://hooks.slack.com/services/workflow-notify',
-      x: sourceNode.x + 280,
-      y: Math.max(50, sourceNode.y + yOffset),
-      status: 'idle'
-    };
-
-    const newEdge: WorkflowEdge = {
-      id: `edge-${Date.now()}`,
-      from: sourceNode.id,
-      to: newNode.id,
-      type: edgeType
-    };
-
-    const updatedWorkflow = {
-      ...selectedWf,
-      nodes: [...selectedWf.nodes, newNode],
-      edges: [...selectedWf.edges, newEdge]
-    };
-
-    await persistWorkflow(updatedWorkflow);
+  const handleCreateAndConnectWebhookNode = (fromNodeId: string, edgeType: 'success' | 'failure' | 'always') => {
+    if (!selectedWf?.nodes.some((node) => node.id === fromNodeId)) return;
+    setNodeType('notification');
+    setNodeLabel('Webhook / Notification Alert');
+    setWebhookUrl('');
+    setWebhookHeaders('{\n  "Content-Type": "application/json"\n}');
+    setWebhookBody('{\n  "workflow": "{{workflow_name}}",\n  "node": "{{node_label}}",\n  "status": "{{status}}"\n}');
+    setPendingWebhookConnection({ fromNodeId, edgeType });
+    setEditingWebhookNodeId(null);
     setShowConnectModal(false);
+    setShowAddNodeModal(true);
   };
 
   const runDownstreamExecution = (
@@ -584,6 +651,7 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
   ) => {
     if (!selectedWf) return;
     const currentWf = selectedWf;
+    const triggerVariables = parseWorkflowTriggerVariables(workflowTriggerVariablesJson);
     const startTime = Date.now();
     let accumulatedLogs: string[] = [
       ...(executionLogs.length > 0 ? executionLogs : []),
@@ -687,7 +755,7 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
         if (currNode.type === 'playbook' && currNode.templateId) {
           try {
             const startedTask = await api.runTemplate(currNode.templateId, {
-              extraVars: '{}',
+              extraVars: JSON.stringify(triggerVariables),
               limit: workflowLimit || 'all',
               triggeredBy: `Workflow: ${currentWf.name}`
             });
@@ -708,8 +776,28 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
             outcomeStatus = 'failed';
             appendLogs([`[${new Date().toLocaleTimeString()}] [TASK ERROR] ${error instanceof Error ? error.message : String(error)}`]);
           }
-        } else if (currNode.simulateFailure) {
-          outcomeStatus = 'failed';
+        } else if (currNode.type === 'email') {
+          try {
+            const result = await api.sendWorkflowEmailNode(currentWf.id, currNode.id, triggerVariables);
+            const delivery = result.emailResults[0];
+            appendLogs([`[${new Date().toLocaleTimeString()}] [EMAIL SENT] ${currNode.emailTo} (Message ID: ${delivery?.messageId || 'accepted'})`]);
+          } catch (error) {
+            outcomeStatus = 'failed';
+            appendLogs([`[${new Date().toLocaleTimeString()}] [EMAIL ERROR] ${error instanceof Error ? error.message : String(error)}`]);
+          }
+        } else if (currNode.type === 'notification') {
+          try {
+            const result = await api.sendWorkflowWebhookNode(currentWf.id, currNode.id, {
+              ...triggerVariables,
+              workflow_limit: workflowLimit,
+              triggered_by: 'admin'
+            });
+            appendLogs([`[${new Date().toLocaleTimeString()}] [WEBHOOK SENT] HTTP ${result.status}`]);
+            if (result.responseBody) appendLogs([`[${new Date().toLocaleTimeString()}] [WEBHOOK RESPONSE] ${result.responseBody}`]);
+          } catch (error) {
+            outcomeStatus = 'failed';
+            appendLogs([`[${new Date().toLocaleTimeString()}] [WEBHOOK ERROR] ${error instanceof Error ? error.message : String(error)}`]);
+          }
         }
 
         if (outcomeStatus === 'failed') {
@@ -887,18 +975,16 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
     await persistWorkflow(updated);
   };
 
-  const toggleSimulateFailure = (nodeId: string) => {
-    if (!selectedWf) return;
-    const updated = {
-      ...selectedWf,
-      nodes: selectedWf.nodes.map(n => n.id === nodeId ? { ...n, simulateFailure: !n.simulateFailure } : n)
-    };
-    persistWorkflow(updated);
-  };
-
   const handleRunWorkflow = () => {
     if (!selectedWf || isRunning) return;
     const currentWf = selectedWf;
+    let triggerVariables: Record<string, unknown>;
+    try {
+      triggerVariables = parseWorkflowTriggerVariables(workflowTriggerVariablesJson);
+    } catch (error) {
+      setExecutionLogs([`[${new Date().toLocaleTimeString()}] [ERROR] ${error instanceof Error ? error.message : String(error)}`]);
+      return;
+    }
     
     if (currentWf.nodes.length === 0) {
       setExecutionLogs([
@@ -1144,7 +1230,7 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
         if (currNode.type === 'playbook' && currNode.templateId) {
           try {
             const startedTask = await api.runTemplate(currNode.templateId, {
-              extraVars: '{}',
+              extraVars: JSON.stringify(triggerVariables),
               limit: workflowLimit || 'all',
               triggeredBy: `Workflow: ${currentWf.name}`
             });
@@ -1161,8 +1247,28 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
             outcomeStatus = 'failed';
             appendLogs([`[${new Date().toLocaleTimeString()}] [TASK ERROR] ${error instanceof Error ? error.message : String(error)}`]);
           }
-        } else if (currNode.simulateFailure) {
-          outcomeStatus = 'failed';
+        } else if (currNode.type === 'email') {
+          try {
+            const result = await api.sendWorkflowEmailNode(currentWf.id, currNode.id, triggerVariables);
+            const delivery = result.emailResults[0];
+            appendLogs([`[${new Date().toLocaleTimeString()}] [EMAIL SENT] ${currNode.emailTo} (Message ID: ${delivery?.messageId || 'accepted'})`]);
+          } catch (error) {
+            outcomeStatus = 'failed';
+            appendLogs([`[${new Date().toLocaleTimeString()}] [EMAIL ERROR] ${error instanceof Error ? error.message : String(error)}`]);
+          }
+        } else if (currNode.type === 'notification') {
+          try {
+            const result = await api.sendWorkflowWebhookNode(currentWf.id, currNode.id, {
+              ...triggerVariables,
+              workflow_limit: workflowLimit,
+              triggered_by: 'admin'
+            });
+            appendLogs([`[${new Date().toLocaleTimeString()}] [WEBHOOK SENT] HTTP ${result.status}`]);
+            if (result.responseBody) appendLogs([`[${new Date().toLocaleTimeString()}] [WEBHOOK RESPONSE] ${result.responseBody}`]);
+          } catch (error) {
+            outcomeStatus = 'failed';
+            appendLogs([`[${new Date().toLocaleTimeString()}] [WEBHOOK ERROR] ${error instanceof Error ? error.message : String(error)}`]);
+          }
         }
 
         if (outcomeStatus === 'failed') {
@@ -1237,7 +1343,20 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
     }
     try {
       const history = await api.getTasks(node.templateId);
-      const orderedHistory = [...history].sort((a, b) =>
+      const orderedHistory = (Array.isArray(history) ? history : []).map((execution) => ({
+        ...execution,
+        status: execution.status || 'failed',
+        hostsStats: {
+          ok: execution.hostsStats?.ok ?? 0,
+          changed: execution.hostsStats?.changed ?? 0,
+          unreachable: execution.hostsStats?.unreachable ?? 0,
+          failed: execution.hostsStats?.failed ?? 0,
+          skipped: execution.hostsStats?.skipped ?? 0
+        },
+        logs: Array.isArray(execution.logs)
+          ? execution.logs.map((log) => typeof log === 'string' ? log : JSON.stringify(log) ?? String(log))
+          : []
+      })).sort((a, b) =>
         new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime()
       );
       setLatestNodeExecution(orderedHistory[0] || null);
@@ -1248,6 +1367,14 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
       setSelectedNodeForHistory({ ...node, executionHistory: [] });
     }
     setShowHistoryPanel(true);
+  };
+
+  const handleViewWorkflowLogs = () => {
+    if (isRunning) {
+      document.getElementById('workflow-execution-console')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return;
+    }
+    setShowWorkflowHistoryPage(true);
   };
 
   const handleDeleteNode = async (nodeId: string) => {
@@ -1270,6 +1397,111 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
     return (
       <div className="glass-panel" style={{ padding: 40, textAlign: 'center', color: 'var(--text-muted)' }}>
         Loading workflow...
+      </div>
+    );
+  }
+
+  if (showWorkflowHistoryPage) {
+    const runs = selectedWf.executionHistory || [];
+    const query = workflowHistorySearch.trim().toLowerCase();
+    const filteredRuns = runs.filter((run) =>
+      [run.id, run.status, run.triggeredBy, run.startedAt, new Date(run.startedAt).toLocaleString()]
+        .some((value) => value.toLowerCase().includes(query))
+    );
+
+    return (
+      <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 16 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <button className="btn btn-secondary" onClick={() => setShowWorkflowHistoryPage(false)} title="Back to workflow diagram">
+              <ArrowLeft size={16} />
+              <span>Workflow diagram</span>
+            </button>
+            <div>
+              <h2 style={{ fontSize: '1.35rem', fontWeight: 800, color: 'var(--text-primary)', margin: 0 }}>
+                Workflow Execution History
+              </h2>
+              <p style={{ color: 'var(--text-muted)', fontSize: '0.82rem', margin: '4px 0 0' }}>
+                {selectedWf.name} · {runs.length} runs
+              </p>
+            </div>
+          </div>
+          <div style={{ position: 'relative', width: 280, maxWidth: '100%' }}>
+            <Search size={14} style={{ position: 'absolute', left: 11, top: 11, color: 'var(--text-muted)' }} />
+            <input
+              className="form-control"
+              value={workflowHistorySearch}
+              onChange={(event) => setWorkflowHistorySearch(event.target.value)}
+              placeholder="Search runs..."
+              aria-label="Search workflow execution history"
+              style={{ height: 36, paddingLeft: 32 }}
+            />
+          </div>
+        </div>
+
+        <div className="glass-panel" style={{ overflow: 'hidden' }}>
+          {filteredRuns.length > 0 ? (
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', minWidth: 900, borderCollapse: 'collapse', fontSize: '0.82rem' }}>
+                <thead>
+                  <tr style={{ borderBottom: '1px solid var(--border-color)', color: 'var(--text-muted)', textAlign: 'left' }}>
+                    <th style={{ padding: '12px 14px' }}>STARTED</th>
+                    <th style={{ padding: '12px 14px' }}>STATUS</th>
+                    <th style={{ padding: '12px 14px' }}>DURATION</th>
+                    <th style={{ padding: '12px 14px' }}>STAGES</th>
+                    <th style={{ padding: '12px 14px' }}>TRIGGERED BY</th>
+                    <th style={{ padding: '12px 14px' }}>EXECUTION ID</th>
+                    <th style={{ padding: '12px 14px', textAlign: 'right' }}>LOGS</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredRuns.map((run) => (
+                    <React.Fragment key={run.id}>
+                      <tr style={{ borderBottom: '1px solid var(--border-color)', color: 'var(--text-primary)' }}>
+                        <td style={{ padding: '12px 14px', whiteSpace: 'nowrap' }}>{new Date(run.startedAt).toLocaleString()}</td>
+                        <td style={{ padding: '12px 14px' }}>
+                          <span className={`badge ${run.status === 'success' ? 'badge-success' : run.status === 'failed' ? 'badge-failed' : 'badge-running'}`}>
+                            {run.status.toUpperCase()}
+                          </span>
+                        </td>
+                        <td style={{ padding: '12px 14px', whiteSpace: 'nowrap' }}>{run.duration}</td>
+                        <td style={{ padding: '12px 14px' }}>{run.totalStages}</td>
+                        <td style={{ padding: '12px 14px' }}>{run.triggeredBy}</td>
+                        <td style={{ padding: '12px 14px', fontFamily: 'var(--font-mono)', fontSize: '0.75rem' }}>{run.id}</td>
+                        <td style={{ padding: '8px 14px', textAlign: 'right' }}>
+                          <button
+                            className="btn btn-secondary btn-sm"
+                            onClick={() => setExpandedWorkflowRunId((current) => current === run.id ? null : run.id)}
+                            aria-expanded={expandedWorkflowRunId === run.id}
+                          >
+                            <Terminal size={13} />
+                            <span>{expandedWorkflowRunId === run.id ? 'Hide logs' : 'View logs'}</span>
+                          </button>
+                        </td>
+                      </tr>
+                      {expandedWorkflowRunId === run.id && (
+                        <tr>
+                          <td colSpan={7} style={{ padding: '0 14px 14px' }}>
+                            <div style={{ backgroundColor: 'var(--terminal-bg)', color: 'var(--terminal-text)', borderRadius: 6, padding: '12px 14px', fontFamily: 'var(--font-mono)', fontSize: '0.75rem', lineHeight: 1.5, maxHeight: 360, overflowY: 'auto' }}>
+                              {Array.isArray(run.logs) && run.logs.length > 0 ? run.logs.map((logLine, index) => (
+                                <div key={index} style={{ color: logLine.includes('SUCCESS') ? '#34d399' : '#cbd5e1' }}>{logLine}</div>
+                              )) : <span style={{ color: '#64748b', fontStyle: 'italic' }}>No console logs captured.</span>}
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div style={{ textAlign: 'center', padding: 40, color: 'var(--text-muted)' }}>
+              <History size={36} style={{ marginBottom: 12, opacity: 0.5 }} />
+              <p>{runs.length === 0 ? 'No workflow execution history recorded yet.' : 'No runs match your search.'}</p>
+            </div>
+          )}
+        </div>
       </div>
     );
   }
@@ -1318,7 +1550,7 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
             <Link2 size={14} />
             <span>Connect Steps</span>
           </button>
-          <button className="btn btn-secondary" onClick={() => setShowWorkflowHistoryModal(true)}>
+          <button className="btn btn-secondary" onClick={() => setShowWorkflowHistoryPage(true)}>
             <History size={14} />
             <span>Pipeline History ({selectedWf.executionHistory?.length || 0})</span>
           </button>
@@ -1339,6 +1571,15 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
             style={{ width: 180 }}
             disabled={isRunning}
           />
+          <button
+            className="btn btn-secondary"
+            onClick={() => setShowWorkflowTriggerVariables(true)}
+            disabled={isRunning}
+            title="Set JSON values for this workflow run"
+          >
+            <Braces size={14} />
+            <span>Trigger vars</span>
+          </button>
           <select
             className="form-control"
             value={workflowStartNodeId}
@@ -1410,6 +1651,7 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
       >
         {/* Floating Zoom Controls Toolbar */}
         <div
+            ref={canvasRef}
           style={{
             position: 'absolute',
             top: 16,
@@ -1617,11 +1859,13 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
 
                   const isRunningEdge = fromNode.status === 'running' || toNode.status === 'running';
 
-                  // Calculate connection coordinates (Node width = 210px, approx height = 130px)
-                  let startX = fromNode.x + 210;
-                  let startY = fromNode.y + 60;
+                  const fromRect = nodeRects[fromNode.id] || { width: 220, height: 150 };
+                  const toRect = nodeRects[toNode.id] || { width: 220, height: 150 };
+                  // Use the measured card dimensions so arrows stay attached to variable-height nodes.
+                  let startX = fromNode.x + fromRect.width;
+                  let startY = fromNode.y + fromRect.height / 2;
                   let endX = toNode.x;
-                  let endY = toNode.y + 60;
+                  let endY = toNode.y + toRect.height / 2;
                   let pathD = '';
                   let midX = (startX + endX) / 2;
                   let midY = (startY + endY) / 2;
@@ -1634,9 +1878,9 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
                     midY = (startY + endY) / 2;
                   } else {
                     // Loop-around vertical curve when target is to the left or directly above/below
-                    startX = fromNode.x + 105;
-                    startY = fromNode.y + 120;
-                    endX = toNode.x + 105;
+                    startX = fromNode.x + fromRect.width / 2;
+                    startY = fromNode.y + fromRect.height;
+                    endX = toNode.x + toRect.width / 2;
                     endY = toNode.y;
                     const dy = Math.max(50, Math.abs(endY - startY) / 2);
                     pathD = `M ${startX} ${startY} C ${startX} ${startY + dy}, ${endX} ${endY - dy}, ${endX} ${endY}`;
@@ -1758,6 +2002,10 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
               return (
                 <div
                   key={node.id}
+                  ref={(element) => {
+                    if (element) nodeRefs.current.set(node.id, element);
+                    else nodeRefs.current.delete(node.id);
+                  }}
                   onMouseDown={(e) => handleNodeMouseDown(e, node)}
                   style={{
                     width: '220px',
@@ -1780,7 +2028,7 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
                     cursor: isDraggingThis ? 'grabbing' : 'grab',
                     zIndex: isDraggingThis ? 20 : 3
                   }}
-                  className={node.status === 'running' ? 'pulse-running' : ''}
+                  className={node.status === 'running' ? 'workflow-node-running' : ''}
                   onClick={() => {
                     if (!hasMovedRef.current) {
                       handleNodeClick(node);
@@ -1851,6 +2099,19 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
                             alignItems: 'center'
                           }}
                           title="Paramétrer les branchements YES / NO"
+                        >
+                          <Settings size={13} />
+                        </button>
+                      )}
+                      {node.type === 'notification' && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleEditWebhookNode(node);
+                          }}
+                          onMouseDown={(e) => e.stopPropagation()}
+                          style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: 2 }}
+                          title="Configure webhook URL, headers, and body"
                         >
                           <Settings size={13} />
                         </button>
@@ -2183,119 +2444,48 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
                   ) : (
                     /* PLAYBOOK TASK CARD BODY */
                     <>
-                      {/* Branch Simulator Toggle */}
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 2 }}>
-                        <span className="badge badge-info" style={{ fontSize: '0.6rem' }}>
-                          {node.status.toUpperCase()}
-                        </span>
+                      {node.status !== 'idle' && (
+                        <div style={{ display: 'flex', alignItems: 'center', marginTop: 2 }}>
+                          <span className="badge badge-info" style={{ fontSize: '0.6rem' }}>
+                            {node.status.toUpperCase()}
+                          </span>
+                        </div>
+                      )}
+
+                      {node.templateId && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleViewWorkflowLogs();
+                          }}
+                          onMouseDown={(e) => e.stopPropagation()}
+                          className="btn btn-secondary btn-sm"
+                          style={{ width: '100%', justifyContent: 'center', gap: 5, fontSize: '0.68rem', padding: '5px 8px' }}
+                          title="View complete workflow execution logs"
+                        >
+                          <Terminal size={11} />
+                          <span>View workflow logs</span>
+                        </button>
+                      )}
+
+                      {/* Link task action */}
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4, paddingTop: 6, borderTop: '1px dashed var(--border-color)' }}>
+                        <div style={{ fontSize: '0.625rem', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                          Next task
+                        </div>
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
-                            toggleSimulateFailure(node.id);
+                            handleOpenConnectModal(node.id, 'success');
                           }}
-                          style={{
-                            fontSize: '0.6rem',
-                            fontWeight: 700,
-                            padding: '2px 5px',
-                            borderRadius: 4,
-                            border: '1px solid',
-                            borderColor: node.simulateFailure ? '#ef4444' : '#10b981',
-                            backgroundColor: node.simulateFailure ? 'rgba(239, 68, 68, 0.12)' : 'rgba(16, 185, 129, 0.12)',
-                            color: node.simulateFailure ? '#ef4444' : '#10b981',
-                            cursor: 'pointer'
-                          }}
-                          title={node.simulateFailure ? 'Node set to FAIL mode (will test ON FAILURE branch)' : 'Node set to PASS mode (will test ON SUCCESS branch)'}
+                          className="btn btn-secondary btn-sm"
+                          style={{ width: '100%', justifyContent: 'center', gap: 5, fontSize: '0.68rem', padding: '5px 8px' }}
+                          title="Link a task and choose when it should run"
                         >
-                          {node.simulateFailure ? '🔴 Sim FAIL' : '🟢 Sim PASS'}
+                          <Link2 size={11} />
+                          <span>Link task</span>
                         </button>
-                      </div>
-
-                      {/* AWX Style Branch Link Action Bar */}
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4, paddingTop: 6, borderTop: '1px dashed var(--border-color)' }}>
-                        <div style={{ fontSize: '0.625rem', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-                          AWX Link Next Task:
-                        </div>
-                        <div style={{ display: 'flex', gap: 4 }}>
-                          {/* On Success Link */}
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleOpenConnectModal(node.id, 'success');
-                            }}
-                            style={{
-                              flex: 1,
-                              display: 'flex',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              gap: 2,
-                              padding: '3px 4px',
-                              borderRadius: 6,
-                              border: '1px solid rgba(16, 185, 129, 0.4)',
-                              backgroundColor: 'rgba(16, 185, 129, 0.12)',
-                              color: '#10b981',
-                              cursor: 'pointer',
-                              fontSize: '0.65rem',
-                              fontWeight: 700
-                            }}
-                            title="AWX Style: Link a task to run when THIS task SUCCEEDS (Green Arrow)"
-                          >
-                            <Plus size={10} />
-                            <span>Success</span>
-                          </button>
-
-                          {/* On Failure Link */}
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleOpenConnectModal(node.id, 'failure');
-                            }}
-                            style={{
-                              flex: 1,
-                              display: 'flex',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              gap: 2,
-                              padding: '3px 4px',
-                              borderRadius: 6,
-                              border: '1px solid rgba(239, 68, 68, 0.4)',
-                              backgroundColor: 'rgba(239, 68, 68, 0.12)',
-                              color: '#ef4444',
-                              cursor: 'pointer',
-                              fontSize: '0.65rem',
-                              fontWeight: 700
-                            }}
-                            title="AWX Style: Link a task to run when THIS task FAILS (Red Arrow)"
-                          >
-                            <Plus size={10} />
-                            <span>Failure</span>
-                          </button>
-
-                          {/* Always Link */}
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleOpenConnectModal(node.id, 'always');
-                            }}
-                            style={{
-                              display: 'flex',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              gap: 2,
-                              padding: '3px 4px',
-                              borderRadius: 6,
-                              border: '1px solid rgba(56, 189, 248, 0.4)',
-                              backgroundColor: 'rgba(56, 189, 248, 0.12)',
-                              color: '#38bdf8',
-                              cursor: 'pointer',
-                              fontSize: '0.65rem',
-                              fontWeight: 700
-                            }}
-                            title="AWX Style: Link a task to ALWAYS run (Blue Arrow)"
-                          >
-                            <Plus size={10} />
-                            <span>Always</span>
-                          </button>
-                        </div>
                       </div>
                     </>
                   )}
@@ -2308,7 +2498,7 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
       </div>
 
       {/* Live Pipeline Execution Output Console */}
-      <div className="glass-panel" style={{ padding: '24px' }}>
+      <div id="workflow-execution-console" className="glass-panel" style={{ padding: '24px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <Terminal size={17} style={{ color: '#38bdf8' }} />
@@ -2349,14 +2539,44 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
         </div>
       </div>
 
+      {showWorkflowTriggerVariables && (
+        <div className="modal-overlay">
+          <div className="modal-content animate-fade-in" style={{ padding: 24, maxWidth: 560 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+                <Braces size={18} style={{ color: 'var(--accent-primary)' }} />
+                <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 800 }}>Workflow Trigger Variables</h3>
+              </div>
+              <button onClick={() => setShowWorkflowTriggerVariables(false)} style={{ background: 'none', border: 0, color: 'var(--text-muted)', cursor: 'pointer' }} title="Close">
+                <X size={20} />
+              </button>
+            </div>
+            <label className="form-label" htmlFor="workflow-trigger-variables">Variables (JSON object)</label>
+            <textarea
+              id="workflow-trigger-variables"
+              className="form-control"
+              rows={9}
+              value={workflowTriggerVariablesJson}
+              onChange={(event) => setWorkflowTriggerVariablesJson(event.target.value)}
+              spellCheck={false}
+              style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }}
+              placeholder={'{\n  "token": "...",\n  "environment": "production"\n}'}
+            />
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}>
+              <button className="btn btn-primary" onClick={() => setShowWorkflowTriggerVariables(false)}>Done</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Add Node Modal */}
       {showAddNodeModal && (
         <div className="modal-overlay">
           <div className="modal-content animate-fade-in" style={{ padding: '24px', maxWidth: 480 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18 }}>
-              <h3 style={{ fontSize: '1.2rem', fontWeight: 800 }}>Add Stage Node</h3>
+              <h3 style={{ fontSize: '1.2rem', fontWeight: 800 }}>{editingWebhookNodeId ? 'Edit Webhook Node' : 'Add Stage Node'}</h3>
               <button
-                onClick={() => setShowAddNodeModal(false)}
+                onClick={() => { setShowAddNodeModal(false); setEditingWebhookNodeId(null); setPendingWebhookConnection(null); }}
                 style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}
               >
                 <X size={20} />
@@ -2368,6 +2588,7 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
                 <label className="form-label">Node Type</label>
                 <select
                   value={nodeType}
+                  disabled={Boolean(editingWebhookNodeId)}
                   onChange={(e) => {
                     const val = e.target.value as any;
                     setNodeType(val);
@@ -2500,28 +2721,52 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
               )}
 
               {nodeType === 'notification' && (
-                <div>
-                  <label className="form-label">Webhook Endpoint (required)</label>
-                  <input
-                    type="url"
-                    required
-                    className="form-control"
-                    value={webhookUrl}
-                    onChange={(e) => setWebhookUrl(e.target.value)}
-                    placeholder="https://example.com/hooks/automation"
-                  />
-                  <span style={{ display: 'block', marginTop: 5, fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-                    The workflow will POST its execution event to this URL.
-                  </span>
-                </div>
+                <>
+                  <div>
+                    <label className="form-label">Webhook Endpoint (required)</label>
+                    <input
+                      type="url"
+                      required
+                      className="form-control"
+                      value={webhookUrl}
+                      onChange={(e) => setWebhookUrl(e.target.value)}
+                      placeholder="https://example.com/hooks/automation"
+                    />
+                  </div>
+                  <div>
+                    <label className="form-label">Request Headers (JSON)</label>
+                    <textarea
+                      className="form-control"
+                      rows={4}
+                      value={webhookHeaders}
+                      onChange={(e) => setWebhookHeaders(e.target.value)}
+                      spellCheck={false}
+                      style={{ fontFamily: 'var(--font-mono)', fontSize: '0.78rem' }}
+                    />
+                  </div>
+                  <div>
+                    <label className="form-label">Request Body (JSON)</label>
+                    <textarea
+                      className="form-control"
+                      rows={6}
+                      value={webhookBody}
+                      onChange={(e) => setWebhookBody(e.target.value)}
+                      spellCheck={false}
+                      style={{ fontFamily: 'var(--font-mono)', fontSize: '0.78rem' }}
+                    />
+                    <span style={{ display: 'block', marginTop: 5, fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                      Supports workflow fields and trigger values such as <code>{'{{variables.key}}'}</code> or <code>{'{{vars.key}}'}</code>.
+                    </span>
+                  </div>
+                </>
               )}
 
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 10 }}>
-                <button className="btn btn-secondary" onClick={() => setShowAddNodeModal(false)}>
+                <button className="btn btn-secondary" onClick={() => { setShowAddNodeModal(false); setEditingWebhookNodeId(null); setPendingWebhookConnection(null); }}>
                   Cancel
                 </button>
                 <button className="btn btn-primary" onClick={handleAddNode}>
-                  Append Node
+                  {editingWebhookNodeId ? 'Save Webhook' : pendingWebhookConnection ? 'Create and Link Webhook' : 'Append Node'}
                 </button>
               </div>
             </div>
@@ -2998,123 +3243,6 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
         </div>
       )}
 
-      {/* Overall Workflow Diagram Execution History Modal */}
-      {showWorkflowHistoryModal && selectedWf && (
-        <div className="modal-overlay">
-          <div className="modal-content animate-fade-in" style={{ padding: '24px', maxWidth: 840, maxHeight: '80vh', overflowY: 'auto' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                <History size={22} style={{ color: 'var(--accent-primary)' }} />
-                <div>
-                  <h3 style={{ fontSize: '1.25rem', fontWeight: 800, margin: 0 }}>
-                    Workflow Execution History
-                  </h3>
-                  <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', margin: 0 }}>
-                    Pipeline: {selectedWf.name} ({selectedWf.executionHistory?.length || 0} runs recorded)
-                  </p>
-                </div>
-              </div>
-              <button
-                onClick={() => setShowWorkflowHistoryModal(false)}
-                style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}
-              >
-                <X size={20} />
-              </button>
-            </div>
-
-            {selectedWf.executionHistory && selectedWf.executionHistory.length > 0 ? (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-                {selectedWf.executionHistory.map((run) => (
-                  <div
-                    key={run.id}
-                    style={{
-                      padding: '16px',
-                      border: '1px solid var(--border-color)',
-                      borderRadius: 10,
-                      backgroundColor: 'var(--bg-tertiary)'
-                    }}
-                  >
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                        {run.status === 'success' ? (
-                          <CheckCircle size={20} color="#10b981" />
-                        ) : run.status === 'failed' ? (
-                          <XCircle size={20} color="#ef4444" />
-                        ) : (
-                          <Activity size={20} color="#a855f7" className="spin-slow" />
-                        )}
-                        <div>
-                          <span style={{ fontWeight: 800, fontSize: '0.95rem', color: 'var(--text-primary)', marginRight: 8 }}>
-                            {run.status.toUpperCase()} PIPELINE RUN
-                          </span>
-                          <span className="badge badge-info" style={{ fontSize: '0.7rem' }}>
-                            {run.totalStages} Stages Executed
-                          </span>
-                        </div>
-                      </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                        <Clock size={14} />
-                        <span>Duration: {run.duration}</span>
-                      </div>
-                    </div>
-
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 12, fontSize: '0.82rem' }}>
-                      <div>
-                        <span style={{ color: 'var(--text-muted)', display: 'block', fontSize: '0.72rem' }}>Started At</span>
-                        <span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>
-                          {new Date(run.startedAt).toLocaleString()}
-                        </span>
-                      </div>
-                      <div>
-                        <span style={{ color: 'var(--text-muted)', display: 'block', fontSize: '0.72rem' }}>Triggered By</span>
-                        <span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>{run.triggeredBy}</span>
-                      </div>
-                      <div>
-                        <span style={{ color: 'var(--text-muted)', display: 'block', fontSize: '0.72rem' }}>Execution ID</span>
-                        <span style={{ color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>{run.id}</span>
-                      </div>
-                    </div>
-
-                    <div>
-                      <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>
-                        Recorded Execution Console Logs ({run.logs?.length || 0} lines)
-                      </span>
-                      <div
-                        style={{
-                          backgroundColor: 'var(--terminal-bg)',
-                          color: 'var(--terminal-text)',
-                          borderRadius: 6,
-                          padding: '12px 14px',
-                          fontFamily: 'var(--font-mono)',
-                          fontSize: '0.75rem',
-                          lineHeight: '1.5',
-                          maxHeight: '160px',
-                          overflowY: 'auto'
-                        }}
-                      >
-                        {run.logs && run.logs.length > 0 ? (
-                          run.logs.map((logLine, idx) => (
-                            <div key={idx} style={{ color: logLine.includes('SUCCESS') ? '#34d399' : '#cbd5e1' }}>
-                              {logLine}
-                            </div>
-                          ))
-                        ) : (
-                          <span style={{ color: '#64748b', fontStyle: 'italic' }}>No console logs captured.</span>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>
-                <History size={48} style={{ marginBottom: 16, opacity: 0.5 }} />
-                <p>No workflow execution history recorded yet. Click "Execute Workflow" to run your pipeline.</p>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
     </div>
   );
 };

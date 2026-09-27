@@ -163,6 +163,8 @@ export interface WorkflowNode {
   label: string;
   playbook?: string;
   hookUrl?: string;
+  webhookHeaders?: string;
+  webhookBody?: string;
   emailTo?: string;
   emailCc?: string;
   emailBcc?: string;
@@ -198,6 +200,21 @@ export interface WorkflowExecution {
   triggeredBy: string;
   totalStages: number;
   logs: string[];
+}
+
+export interface MailSettings {
+  host: string;
+  port: number;
+  secure: boolean;
+  username: string;
+  fromAddress: string;
+  passwordConfigured: boolean;
+}
+
+export interface RuntimeSettings {
+  maxConcurrentTasks: number;
+  logRetentionDays: number;
+  deletedLogs?: number;
 }
 
 export interface Workflow {
@@ -261,5 +278,18 @@ export interface SystemInfo {
     pythonVersion: string;
     uptime: number;
     memoryUsageMb: number;
+  };
+}
+
+export interface SystemPerformance {
+  collectedAt: string;
+  cpuPercent: number;
+  memory: { totalBytes: number; freeBytes: number; usedBytes: number; percent: number };
+  process: { rssBytes: number; heapUsedBytes: number; uptimeSeconds: number };
+  disk: { totalBytes: number; freeBytes: number; usedBytes: number };
+  runningTasks: TaskExecution[];
+  storage: {
+    templates: { bytes: number; files: number };
+    workspaces: { bytes: number; files: number };
   };
 }

@@ -179,6 +179,15 @@ body {
   animation: pulse-dot 1.5s infinite ease-in-out;
 }
 
+@keyframes workflow-node-glow {
+  0%, 100% { filter: brightness(1); }
+  50% { filter: brightness(1.18); }
+}
+
+.workflow-node-running {
+  animation: workflow-node-glow 1.5s infinite ease-in-out;
+}
+
 .spin-slow {
   animation: spin 3s linear infinite;
 }
@@ -189,6 +198,79 @@ body {
   border: 1px solid var(--border-color);
   box-shadow: var(--card-shadow);
   border-radius: 12px;
+}
+
+.template-card {
+  position: relative;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.04);
+}
+
+.template-card:hover {
+  border-color: var(--border-focus);
+  transform: translateY(-1px);
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.08);
+}
+
+.template-card-selected {
+  box-shadow: 0 0 0 2px var(--accent-primary), 0 8px 18px rgba(37, 99, 235, 0.12);
+}
+
+.template-history-panel tbody tr:hover {
+  background: var(--bg-hover);
+}
+
+.template-card-actions .btn {
+  min-height: 32px;
+}
+
+.template-output-panel {
+  position: sticky;
+  top: 20px;
+  z-index: 2;
+}
+
+.template-output-body {
+  max-height: 560px;
+  overflow: auto;
+}
+
+.template-card-footer {
+  align-items: center;
+}
+
+@media (max-width: 520px) {
+  .template-card-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+
+  .template-card-actions .btn-primary {
+    flex: 1;
+    justify-content: center;
+  }
+}
+
+@media (max-width: 900px) {
+  .template-controls {
+    flex-wrap: wrap !important;
+  }
+
+  .template-controls > div {
+    flex: 1 1 240px !important;
+    max-width: none !important;
+  }
+
+  .templates-workspace {
+    grid-template-columns: 1fr !important;
+  }
+
+  .template-list {
+    max-height: none !important;
+  }
+
+  .template-output-panel {
+    position: static;
+  }
 }
 
 .badge {

@@ -302,6 +302,21 @@ try {
   process.exit(1);
 }
 
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS runtime_settings (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      maxConcurrentTasks INTEGER NOT NULL DEFAULT 5,
+      logRetentionDays INTEGER NOT NULL DEFAULT 30,
+      updatedAt TEXT
+    );
+  `);
+} catch (error) {
+  console.error('❌ [DB] Failed to create runtime settings table');
+  console.error(error);
+  process.exit(1);
+}
+
 // Create pending_requests table
 try {
   console.log('📋 [DB] Creating pending_requests table...');
@@ -391,6 +406,26 @@ try { db.exec('ALTER TABLE credentials ADD COLUMN msClientSecret TEXT'); } catch
 try { db.exec('ALTER TABLE credentials ADD COLUMN msTenant TEXT'); } catch (err) {}
 try { db.exec('ALTER TABLE credentials ADD COLUMN domain TEXT'); } catch (err) {}
 try { db.exec('ALTER TABLE credentials ADD COLUMN adAuthMethod TEXT'); } catch (err) {}
+
+// Persist SMTP settings separately from environment defaults.
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS mail_settings (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      host TEXT NOT NULL DEFAULT '',
+      port INTEGER NOT NULL DEFAULT 587,
+      secure INTEGER NOT NULL DEFAULT 0,
+      username TEXT NOT NULL DEFAULT '',
+      password TEXT,
+      fromAddress TEXT NOT NULL DEFAULT '',
+      updatedAt TEXT
+    );
+  `);
+} catch (error) {
+  console.error('❌ [DB] Failed to create mail settings table');
+  console.error(error);
+  process.exit(1);
+}
 
 // Ensure tokens table has expiresAt column (older DBs may not)
 try {

@@ -3,7 +3,8 @@ import {
   Plus,
   X,
   Play,
-  Trash2
+  Trash2,
+  Search
 } from 'lucide-react';
 import type { Workflow, TaskTemplate } from '../types';
 import { api } from '../services/api';
@@ -19,6 +20,7 @@ export const WorkflowBuilderPage: React.FC<WorkflowBuilderPageProps> = ({ onOpen
   const [showWorkflowModal, setShowWorkflowModal] = useState(false);
   const [workflowName, setWorkflowName] = useState('');
   const [workflowDescription, setWorkflowDescription] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
 
   const loadData = async () => {
     try {
@@ -60,6 +62,11 @@ export const WorkflowBuilderPage: React.FC<WorkflowBuilderPageProps> = ({ onOpen
     loadData();
   }, []);
 
+  const filteredWorkflows = workflows.filter((workflow) => {
+    const query = searchQuery.trim().toLowerCase();
+    return !query || workflow.name.toLowerCase().includes(query) || workflow.description.toLowerCase().includes(query);
+  });
+
   return (
     <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
       {/* Header */}
@@ -68,9 +75,6 @@ export const WorkflowBuilderPage: React.FC<WorkflowBuilderPageProps> = ({ onOpen
           <h2 style={{ fontSize: '1.45rem', fontWeight: 800, color: 'var(--text-primary)' }}>
             Visual DAG Multi-Playbook Workflows
           </h2>
-          <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
-            Chain multiple Ansible playbooks, conditional branches, approvals, and rollback handlers into a single automated pipeline diagram.
-          </p>
         </div>
 
         <div style={{ display: 'flex', gap: 10 }}>
@@ -83,9 +87,22 @@ export const WorkflowBuilderPage: React.FC<WorkflowBuilderPageProps> = ({ onOpen
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
         <div className="glass-panel" style={{ padding: 16, overflowX: 'auto' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 14, marginBottom: 12, flexWrap: 'wrap' }}>
             <h3 style={{ fontSize: '0.95rem', fontWeight: 800 }}>Workflows</h3>
-            <span className="badge badge-info">{workflows.length}</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <div style={{ position: 'relative', width: 280 }}>
+                <Search size={14} style={{ position: 'absolute', left: 11, top: 11, color: 'var(--text-muted)' }} />
+                <input
+                  className="form-control"
+                  value={searchQuery}
+                  onChange={(event) => setSearchQuery(event.target.value)}
+                  placeholder="Search workflows..."
+                  aria-label="Search workflows"
+                  style={{ height: 36, paddingLeft: 32 }}
+                />
+              </div>
+              <span className="badge badge-info">{filteredWorkflows.length}</span>
+            </div>
           </div>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem' }}>
             <thead>
@@ -98,7 +115,7 @@ export const WorkflowBuilderPage: React.FC<WorkflowBuilderPageProps> = ({ onOpen
               </tr>
             </thead>
             <tbody>
-              {workflows.map((workflow) => (
+              {filteredWorkflows.map((workflow) => (
                 <tr
                 key={workflow.id}
                 style={{
@@ -125,7 +142,7 @@ export const WorkflowBuilderPage: React.FC<WorkflowBuilderPageProps> = ({ onOpen
                 </td>
               </tr>
             ))}
-            {workflows.length === 0 && <tr><td colSpan={5} style={{ padding: 24, color: 'var(--text-muted)', textAlign: 'center' }}>Create your first workflow.</td></tr>}
+            {filteredWorkflows.length === 0 && <tr><td colSpan={5} style={{ padding: 24, color: 'var(--text-muted)', textAlign: 'center' }}>{workflows.length === 0 ? 'Create your first workflow.' : 'No workflows match your search.'}</td></tr>}
             </tbody>
           </table>
         </div>

@@ -19,7 +19,8 @@ import {
   Zap,
   Sliders,
   Sparkles,
-  Info
+  Info,
+  Settings
 } from 'lucide-react';
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
@@ -67,6 +68,7 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
   }, []);
 
   const isRequester = user?.role === 'Requester';
+  const isAdmin = user?.role === 'Admin';
 
   const allNavItems = [
     { id: 'request-catalog', label: 'Service Catalog', icon: Sparkles, badge: 'Self-Service' },
@@ -87,12 +89,13 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
     },
     { id: 'api-tokens', label: 'API & Webhooks', icon: Key },
     { id: 'users', label: 'Team & RBAC', icon: Users },
+    { id: 'settings', label: 'Settings', icon: Settings },
     { id: 'system-info', label: 'System Info', icon: Info, badge: 'Tools' }
   ];
 
   const navItems = isRequester
     ? allNavItems.filter(item => item.id === 'request-catalog' || item.id === 'pending-requests')
-    : allNavItems;
+    : allNavItems.filter(item => item.id !== 'settings' || isAdmin);
 
   return (
     <div style={{ display: 'flex', minHeight: '100vh', width: '100vw', overflowX: 'hidden', position: 'relative' }}>
@@ -288,6 +291,10 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
                 Logout
               </button>
             </div>
+          </div>
+          <div style={{ color: 'var(--sidebar-text-secondary)', fontSize: '0.64rem', lineHeight: 1.4, borderTop: '1px solid var(--border-color)', paddingTop: 9 }}>
+            Copyright Ghazi Jabnouni<br />
+            Projet de fin d'etude · 2021
           </div>
         </div>
       </aside>

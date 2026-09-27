@@ -57,43 +57,15 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
 
   return (
     <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
-      {/* Top Banner / Welcome */}
-      <div
-        className="glass-panel"
-        style={{
-          padding: '24px 28px',
-          background: 'linear-gradient(135deg, rgba(37, 99, 235, 0.08) 0%, rgba(124, 58, 237, 0.08) 100%)',
-          border: '1px solid rgba(59, 130, 246, 0.2)',
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          flexWrap: 'wrap',
-          gap: 16
-        }}
-      >
-        <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-            <span className="badge badge-success">Cluster Online</span>
-            <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Region: us-east-1 / eu-west-1</span>
-          </div>
-          <h2 style={{ fontSize: '1.45rem', fontWeight: 800, color: 'var(--text-primary)' }}>
-            Ansible Automation Orchestrator
-          </h2>
-          <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', marginTop: 4 }}>
-            Manage repositories, execute playbooks across host clusters, schedule cron tasks, and approve client pipelines.
-          </p>
-        </div>
-
-        <div style={{ display: 'flex', gap: 10 }}>
-          <button className="btn btn-secondary" onClick={loadData}>
-            <RefreshCw size={14} className={loading ? 'spin-slow' : ''} />
-            <span>Refresh</span>
-          </button>
-          <button className="btn btn-primary" onClick={() => onNavigate('templates')}>
-            <Layers size={14} />
-            <span>Manage Templates</span>
-          </button>
-        </div>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+        <button className="btn btn-secondary" onClick={loadData}>
+          <RefreshCw size={14} className={loading ? 'spin-slow' : ''} />
+          <span>Refresh</span>
+        </button>
+        <button className="btn btn-primary" onClick={() => onNavigate('templates')}>
+          <Layers size={14} />
+          <span>Manage Templates</span>
+        </button>
       </div>
 
       {/* Pending Approvals Callout (If any) */}
