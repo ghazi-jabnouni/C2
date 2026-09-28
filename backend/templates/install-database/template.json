@@ -22,5 +22,6 @@
   "provider": "aws",
   "terraformAction": "apply",
   "winrmPort": "5985",
-  "winrmUseSsl": "0"
+  "winrmUseSsl": "0",
+  "requiredVars": []
 }

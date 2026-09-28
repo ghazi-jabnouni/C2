@@ -85,8 +85,18 @@ export const CredentialModel = {
   },
 
   delete: (id) => {
-    const info = db.prepare('DELETE FROM credentials WHERE id = ?').run(id);
-    return info.changes > 0;
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      db.prepare('UPDATE templates SET credentialId = NULL WHERE credentialId = ?').run(id);
+      db.prepare('UPDATE inventories SET credentialId = NULL WHERE credentialId = ?').run(id);
+      db.prepare('UPDATE repositories SET credentialId = NULL WHERE credentialId = ?').run(id);
+      const info = db.prepare('DELETE FROM credentials WHERE id = ?').run(id);
+      db.exec('COMMIT');
+      return info.changes > 0;
+    } catch (error) {
+      try { db.exec('ROLLBACK'); } catch (_) {}
+      throw error;
+    }
   }
 };
 

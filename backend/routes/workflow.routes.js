@@ -6,6 +6,7 @@ router.get('/', WorkflowController.list);
 router.post('/', WorkflowController.create);
 router.put('/:id', WorkflowController.update);
 router.get('/:id/runs/:runId', WorkflowController.getRun);
+router.delete('/:id/runs/:runId', WorkflowController.removeRun);
 router.post('/:id/runs/:runId/approval/:nodeId', WorkflowController.approveRun);
 router.post('/:id/run', WorkflowController.run);
 router.post('/:id/nodes/:nodeId/email', WorkflowController.sendEmailNode);

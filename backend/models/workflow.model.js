@@ -73,6 +73,42 @@ export const WorkflowModel = {
     );
     return this.findById(workflowId);
   },
+  removeExecution(workflowId, runId) {
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      const workflowRow = db.prepare('SELECT executionHistory FROM workflows WHERE id = ?').get(workflowId);
+      if (!workflowRow) {
+        db.exec('ROLLBACK');
+        return { status: 'workflow-not-found' };
+      }
+
+      let history = [];
+      try { history = JSON.parse(workflowRow.executionHistory || '[]'); } catch (_) {}
+      const historyHasRun = history.some((run) => run.id === runId);
+      const run = db.prepare('SELECT status FROM workflow_runs WHERE id = ? AND workflowId = ?').get(runId, workflowId);
+      if (!historyHasRun && !run) {
+        db.exec('ROLLBACK');
+        return { status: 'run-not-found' };
+      }
+      if (run && ['running', 'waiting_for_approval'].includes(run.status)) {
+        db.exec('ROLLBACK');
+        return { status: 'run-active' };
+      }
+      if (history.some((item) => item.id === runId && ['running', 'waiting_for_approval'].includes(item.status))) {
+        db.exec('ROLLBACK');
+        return { status: 'run-active' };
+      }
+
+      db.prepare('UPDATE workflows SET executionHistory = ?, updatedAt = ? WHERE id = ?')
+        .run(JSON.stringify(history.filter((item) => item.id !== runId)), new Date().toISOString(), workflowId);
+      db.prepare('DELETE FROM workflow_runs WHERE id = ? AND workflowId = ?').run(runId, workflowId);
+      db.exec('COMMIT');
+      return { status: 'deleted' };
+    } catch (error) {
+      try { db.exec('ROLLBACK'); } catch (_) {}
+      throw error;
+    }
+  },
   pruneExecutionHistoryBefore(cutoff) {
     const workflows = db.prepare('SELECT id, executionHistory FROM workflows').all();
     let removed = 0;
@@ -124,7 +160,26 @@ export const WorkflowModel = {
     return removed;
   },
   delete(workflowId) {
-    return db.prepare('DELETE FROM workflows WHERE id = ?').run(workflowId).changes > 0;
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      const workflow = db.prepare('SELECT id FROM workflows WHERE id = ?').get(workflowId);
+      if (!workflow) {
+        db.exec('ROLLBACK');
+        return { status: 'not-found' };
+      }
+      const activeRun = db.prepare("SELECT id FROM workflow_runs WHERE workflowId = ? AND status IN ('running', 'waiting_for_approval') LIMIT 1").get(workflowId);
+      if (activeRun) {
+        db.exec('ROLLBACK');
+        return { status: 'active' };
+      }
+      db.prepare('DELETE FROM workflow_runs WHERE workflowId = ?').run(workflowId);
+      db.prepare('DELETE FROM workflows WHERE id = ?').run(workflowId);
+      db.exec('COMMIT');
+      return { status: 'deleted' };
+    } catch (error) {
+      try { db.exec('ROLLBACK'); } catch (_) {}
+      throw error;
+    }
   }
 };
 

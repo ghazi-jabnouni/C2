@@ -155,6 +155,8 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
   // Workflow execution history page state
   const [showWorkflowHistoryPage, setShowWorkflowHistoryPage] = useState(false);
   const [workflowHistorySearch, setWorkflowHistorySearch] = useState('');
+  const [workflowHistoryPage, setWorkflowHistoryPage] = useState(1);
+  const [workflowHistoryPageSize, setWorkflowHistoryPageSize] = useState(10);
   const [expandedWorkflowRunId, setExpandedWorkflowRunId] = useState<string | null>(null);
 
   // Mouse dragging state for diagram nodes in all directions (Up, Down, Left, Right)
@@ -1081,10 +1083,13 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
     await persistWorkflow(updated);
   };
 
-  const handleRunWorkflow = () => {
+  const handleRunWorkflow = (requestDetailsConfirmed = false) => {
     if (!selectedWf || isRunning) return;
-    if (!serviceName.trim() || !srNumber.trim() || !handoffMessage.trim()) {
+    if (!requestDetailsConfirmed) {
       setShowWorkflowTriggerVariables(true);
+      return;
+    }
+    if (!serviceName.trim() || !srNumber.trim() || !handoffMessage.trim()) {
       setExecutionLogs([`[${new Date().toLocaleTimeString()}] [REQUEST DETAILS REQUIRED] Enter the service name, SR number, and handoff message before starting.`]);
       return;
     }
@@ -1527,7 +1532,19 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
       document.getElementById('workflow-execution-console')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
       return;
     }
+    setWorkflowHistoryPage(1);
     setShowWorkflowHistoryPage(true);
+  };
+
+  const handleDeleteWorkflowRun = async (runId: string) => {
+    if (!selectedWf || !confirm('Delete this pipeline history entry? This cannot be undone.')) return;
+    try {
+      const result = await api.deleteWorkflowRun(selectedWf.id, runId);
+      setSelectedWf(result.workflow);
+      setExpandedWorkflowRunId((current) => current === runId ? null : current);
+    } catch (error) {
+      alert(`Failed to delete workflow history: ${error instanceof Error ? error.message : String(error)}`);
+    }
   };
 
   const handleDeleteNode = async (nodeId: string) => {
@@ -1562,7 +1579,10 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
       return [run.id, run.status, run.triggeredBy, details.serviceName, details.srNumber, details.handoffMessage, run.startedAt, new Date(run.startedAt).toLocaleString()]
         .some((value) => value.toLowerCase().includes(query))
     });
-    const runsWithDetails = filteredRuns.map((run) => ({ ...run, requestDetails: getWorkflowRequestDetails(run) }));
+      const pageCount = Math.max(1, Math.ceil(filteredRuns.length / workflowHistoryPageSize));
+      const currentPage = Math.min(workflowHistoryPage, pageCount);
+      const pageRuns = filteredRuns.slice((currentPage - 1) * workflowHistoryPageSize, currentPage * workflowHistoryPageSize);
+      const runsWithDetails = pageRuns.map((run) => ({ ...run, requestDetails: getWorkflowRequestDetails(run) }));
 
     return (
       <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
@@ -1586,7 +1606,10 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
             <input
               className="form-control"
               value={workflowHistorySearch}
-              onChange={(event) => setWorkflowHistorySearch(event.target.value)}
+              onChange={(event) => {
+                setWorkflowHistorySearch(event.target.value);
+                setWorkflowHistoryPage(1);
+              }}
               placeholder="Search runs..."
               aria-label="Search workflow execution history"
               style={{ height: 36, paddingLeft: 32 }}
@@ -1607,7 +1630,7 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
                     <th style={{ padding: '12px 14px' }}>TRIGGERED BY</th>
                     <th style={{ padding: '12px 14px' }}>SR / REQUEST MESSAGE</th>
                     <th style={{ padding: '12px 14px' }}>EXECUTION ID</th>
-                    <th style={{ padding: '12px 14px', textAlign: 'right' }}>LOGS</th>
+                    <th style={{ padding: '12px 14px', textAlign: 'right' }}>ACTIONS</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1637,6 +1660,7 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
                         </td>
                         <td style={{ padding: '12px 14px', fontFamily: 'var(--font-mono)', fontSize: '0.75rem' }}>{run.id}</td>
                         <td style={{ padding: '8px 14px', textAlign: 'right' }}>
+                          <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 8 }}>
                           <button
                             className="btn btn-secondary btn-sm"
                             onClick={() => setExpandedWorkflowRunId((current) => current === run.id ? null : run.id)}
@@ -1645,6 +1669,16 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
                             <Terminal size={13} />
                             <span>{expandedWorkflowRunId === run.id ? 'Hide logs' : 'View logs'}</span>
                           </button>
+                            <button
+                              className="btn btn-secondary btn-sm"
+                              onClick={() => void handleDeleteWorkflowRun(run.id)}
+                              disabled={String(run.status) === 'running' || String(run.status) === 'waiting_for_approval'}
+                              title={String(run.status) === 'running' || String(run.status) === 'waiting_for_approval' ? 'Active runs cannot be deleted' : 'Delete pipeline history entry'}
+                              aria-label={`Delete pipeline history entry ${run.id}`}
+                            >
+                              <Trash2 size={13} />
+                            </button>
+                          </div>
                         </td>
                       </tr>
                       {expandedWorkflowRunId === run.id && (
@@ -1675,6 +1709,47 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
             </div>
           )}
         </div>
+        {filteredRuns.length > 0 && (
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
+            <span style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>
+              Showing {(currentPage - 1) * workflowHistoryPageSize + 1}–{Math.min(currentPage * workflowHistoryPageSize, filteredRuns.length)} of {filteredRuns.length} runs
+            </span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <label htmlFor="workflow-history-page-size" style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>Rows per page</label>
+              <select
+                id="workflow-history-page-size"
+                className="form-control"
+                value={workflowHistoryPageSize}
+                onChange={(event) => {
+                  setWorkflowHistoryPageSize(Number(event.target.value));
+                  setWorkflowHistoryPage(1);
+                }}
+                style={{ width: 76, height: 34, padding: '4px 8px' }}
+              >
+                <option value={10}>10</option>
+                <option value={25}>25</option>
+                <option value={50}>50</option>
+              </select>
+              <button
+                className="btn btn-secondary btn-sm"
+                onClick={() => setWorkflowHistoryPage((page) => Math.max(1, page - 1))}
+                disabled={currentPage <= 1}
+              >
+                Previous
+              </button>
+              <span style={{ minWidth: 64, textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.8rem' }}>
+                {currentPage} / {pageCount}
+              </span>
+              <button
+                className="btn btn-secondary btn-sm"
+                onClick={() => setWorkflowHistoryPage((page) => Math.min(pageCount, page + 1))}
+                disabled={currentPage >= pageCount}
+              >
+                Next
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -1770,7 +1845,7 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
           </select>
           <button
             className="btn btn-primary"
-            onClick={handleRunWorkflow}
+            onClick={() => handleRunWorkflow()}
             disabled={isRunning}
             style={{ backgroundColor: '#10b981', borderColor: '#10b981' }}
           >
@@ -2775,7 +2850,7 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
                 onClick={() => {
                   if (!serviceName.trim() || !srNumber.trim() || !handoffMessage.trim()) return;
                   setShowWorkflowTriggerVariables(false);
-                  handleRunWorkflow();
+                  handleRunWorkflow(true);
                 }}
                 disabled={!serviceName.trim() || !srNumber.trim() || !handoffMessage.trim() || isRunning}
               >

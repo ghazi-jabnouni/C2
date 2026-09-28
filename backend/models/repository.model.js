@@ -62,7 +62,15 @@ export const RepositoryModel = {
   },
 
   delete: (id) => {
-    const info = db.prepare('DELETE FROM repositories WHERE id = ?').run(id);
-    return info.changes > 0;
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      db.prepare('UPDATE templates SET repositoryId = NULL WHERE repositoryId = ?').run(id);
+      const info = db.prepare('DELETE FROM repositories WHERE id = ?').run(id);
+      db.exec('COMMIT');
+      return info.changes > 0;
+    } catch (error) {
+      try { db.exec('ROLLBACK'); } catch (_) {}
+      throw error;
+    }
   }
 };

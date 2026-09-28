@@ -12,15 +12,16 @@
   "limit": "all",
   "tags": "",
   "allowCliArgs": false,
-  "totalRuns": 1,
+  "totalRuns": 9,
   "lastRunStatus": "failed",
-  "lastRunAt": "2026-09-28T11:29:16.942Z",
+  "lastRunAt": "2026-09-28T15:39:37.136Z",
   "createdAt": "2026-09-28T11:18:52.477Z",
-  "updatedAt": "2026-09-28T11:29:16.942Z",
+  "updatedAt": "2026-09-28T15:39:37.136Z",
   "folderPath": "backend/templates/zef",
   "type": "ansible",
   "provider": "aws",
   "terraformAction": "apply",
   "winrmPort": "5985",
-  "winrmUseSsl": "0"
+  "winrmUseSsl": "0",
+  "requiredVars": []
 }

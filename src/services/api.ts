@@ -202,6 +202,8 @@ export const api = {
     }),
   getWorkflowRun: (workflowId: string, runId: string) =>
     fetchJson<WorkflowRun>(`/workflows/${workflowId}/runs/${runId}`),
+  deleteWorkflowRun: (workflowId: string, runId: string) =>
+    fetchJson<{ success: boolean; workflow: Workflow }>(`/workflows/${workflowId}/runs/${runId}`, { method: 'DELETE' }),
   approveWorkflowRun: (workflowId: string, runId: string, nodeId: string, decision: 'yes' | 'no') =>
     fetchJson<{ accepted: boolean; runId: string; nodeId: string; decision: 'yes' | 'no' }>(
       `/workflows/${workflowId}/runs/${runId}/approval/${nodeId}`,

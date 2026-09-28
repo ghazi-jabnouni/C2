@@ -1,0 +1,13 @@
+{
+  "target_pc ": "127.0.0.1",
+  "backup_type": "full",
+  "compression": "zstd",
+  "verify_checksum": true,
+  "service_name": "dba",
+  "sr_number": "1222",
+  "handoff_message": "install mssql i ncatnce",
+  "ansible_connection": "local",
+  "credential_type": "password",
+  "credential_name": "z server",
+  "ansible_user": "root"
+}

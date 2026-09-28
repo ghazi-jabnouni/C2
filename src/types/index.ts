@@ -78,6 +78,7 @@ export interface TaskTemplate {
   credentialId?: string | null;
   environmentId?: string | null;
   extraVars: string;
+  requiredVars?: string[];
   limit: string;
   tags: string;
   allowCliArgs: boolean;

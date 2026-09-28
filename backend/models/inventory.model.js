@@ -30,7 +30,12 @@ function getInventoryFileName(name, id) {
 function resolveInventoryFilePath(fileName) {
   const safeName = String(fileName || '').trim();
   const file = safeName.endsWith('.yml') || safeName.endsWith('.yaml') ? safeName : `${safeName}.yml`;
-  return path.join(INVENTORY_DIR, file || 'inventory.yml');
+  const filePath = path.resolve(INVENTORY_DIR, file || 'inventory.yml');
+  const relativePath = path.relative(INVENTORY_DIR, filePath);
+  if (!relativePath || relativePath.startsWith('..') || path.isAbsolute(relativePath)) {
+    throw new Error('Inventory file path is outside the inventory directory.');
+  }
+  return filePath;
 }
 
 function loadInventoryFileContent(fileName) {
@@ -59,12 +64,7 @@ function saveInventoryFileContent(fileName, content) {
 
 function deleteInventoryFile(fileName) {
   const filePath = resolveInventoryFilePath(fileName);
-  if (!fs.existsSync(filePath)) return;
-  try {
-    fs.unlinkSync(filePath);
-  } catch (err) {
-    console.error('Error deleting inventory file:', err);
-  }
+  fs.rmSync(filePath, { force: true });
 }
 
 const countHosts = (content) => {
@@ -164,11 +164,20 @@ export const InventoryModel = {
 
   delete(id) {
     const inventory = this.findById(id);
-    if (inventory && inventory.type === 'static' && inventory.fileName) {
+    if (!inventory) return false;
+    if (inventory.type === 'static' && inventory.fileName) {
       deleteInventoryFile(inventory.fileName);
     }
-    const result = db.prepare('DELETE FROM inventories WHERE id = ?').run(id);
-    return result.changes > 0;
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      db.prepare('UPDATE templates SET inventoryId = NULL WHERE inventoryId = ?').run(id);
+      const result = db.prepare('DELETE FROM inventories WHERE id = ?').run(id);
+      db.exec('COMMIT');
+      return result.changes > 0;
+    } catch (error) {
+      try { db.exec('ROLLBACK'); } catch (_) {}
+      throw error;
+    }
   }
 };
 

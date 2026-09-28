@@ -41,8 +41,9 @@ export const EnvironmentController = {
   remove: (req, res) => {
     try {
       const id = req.params.id;
-      EnvironmentModel.delete(id);
-      res.json({ success: true });
+      const result = EnvironmentModel.delete(id);
+      if (!result.success) return res.status(404).json({ error: 'Environment not found' });
+      res.json(result);
     } catch (err) {
       console.error(err);
       res.status(500).json({ error: 'Failed to delete environment' });

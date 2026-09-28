@@ -235,7 +235,7 @@ try {
 }
 
 // Add missing columns to templates if upgrading from old schema
-const templateCols = ['type','provider','terraformAction','winrmPort','winrmUseSsl','description','dbType','repositoryId','playbook','inventoryId','credentialId','environmentId','extraVars','limit','tags','allowCliArgs','totalRuns','lastRunStatus','lastRunAt','createdAt','updatedAt','folderPath'];
+const templateCols = ['type','provider','terraformAction','winrmPort','winrmUseSsl','description','dbType','repositoryId','playbook','inventoryId','credentialId','environmentId','extraVars','requiredVars','limit','tags','allowCliArgs','totalRuns','lastRunStatus','lastRunAt','createdAt','updatedAt','folderPath'];
 for (const col of templateCols) {
   try { db.exec(`ALTER TABLE templates ADD COLUMN "${col}" TEXT`); } catch (_) {}
 }

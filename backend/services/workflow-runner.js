@@ -4,6 +4,7 @@ import { TaskModel } from '../models/task.model.js';
 import { startTemplateExecution } from '../controllers/template.controller.js';
 import { sendWorkflowEmails, sendWorkflowWebhook } from '../controllers/workflow.controller.js';
 import { WorkflowRunEvents } from './workflow-run-events.js';
+import { validateWorkflowPreflight } from './workflow-preflight.js';
 
 const activeRuns = new Set();
 const approvalWaiters = new Map();
@@ -216,6 +217,14 @@ export const WorkflowRunner = {
       error.statusCode = 400;
       throw error;
     }
+    const preflightChecks = validateWorkflowPreflight(workflow, options);
+    const failedChecks = preflightChecks.filter((check) => check.status === 'error');
+    if (failedChecks.length) {
+      const error = new Error(`Preflight failed: ${failedChecks.map((check) => check.message).join(' ')}`);
+      error.statusCode = 422;
+      error.checks = preflightChecks;
+      throw error;
+    }
     const serviceName = String(options.serviceName || options.extraVars?.service_name || '').trim();
     const srNumber = String(options.srNumber || options.extraVars?.sr_number || '').trim();
     const handoffMessage = String(options.handoffMessage || options.extraVars?.handoff_message || '').trim();
@@ -234,6 +243,10 @@ export const WorkflowRunner = {
       serviceName,
       srNumber,
       handoffMessage
+    });
+    preflightChecks.forEach((check) => {
+      const level = check.status === 'warning' ? 'WARNING' : 'PASS';
+      appendLog(run.id, `[PREFLIGHT ${level}] ${check.name}: ${check.message}`);
     });
     if (serviceName || srNumber) {
       appendLog(run.id, `[REQUEST] ${serviceName || 'Service not specified'}${srNumber ? ` | SR ${srNumber}` : ''}`);

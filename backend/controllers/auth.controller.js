@@ -32,6 +32,7 @@ function getAuthForToken(token) {
 function apiTokenScopesForRequest(req) {
   const route = `${req.baseUrl || ''}${req.path || ''}`;
   if (/^\/api\/workflows\/[^/]+\/run$/.test(route) && req.method === 'POST') return ['workflows:run'];
+  if (/^\/api\/workflows\/[^/]+\/runs\/[^/]+$/.test(route) && req.method === 'DELETE') return ['workflows:run'];
   if (/^\/api\/workflows\/[^/]+\/runs\/[^/]+\/approval\/[^/]+$/.test(route) && req.method === 'POST') return ['workflows:approve'];
   if (/^\/api\/workflows\/[^/]+\/runs\/[^/]+$/.test(route) && req.method === 'GET') return ['workflows:read', 'workflows:run'];
   if (route === '/api/workflows' && req.method === 'GET') return ['workflows:read'];

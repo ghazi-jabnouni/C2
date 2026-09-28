@@ -45,6 +45,7 @@ export const CredentialController = {
     try {
       const id = req.params.id;
       const ok = CredentialModel.delete(id);
+      if (!ok) return res.status(404).json({ error: 'Credential not found' });
       res.json({ success: ok });
     } catch (err) {
       console.error('[cred:delete] error', err);

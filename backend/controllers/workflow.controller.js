@@ -160,7 +160,7 @@ export const WorkflowController = {
       });
       res.status(202).json({ message: 'Workflow execution started', run });
     } catch (err) {
-      res.status(err.statusCode || 500).json({ error: err.message });
+      res.status(err.statusCode || 500).json({ error: err.message, checks: err.checks });
     }
   },
   getRun: (req, res) => {
@@ -171,6 +171,20 @@ export const WorkflowController = {
       const run = WorkflowRunModel.findById(req.params.runId);
       if (!run || run.workflowId !== req.params.id) return res.status(404).json({ error: 'Workflow run not found' });
       res.json(run);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  },
+  removeRun: (req, res) => {
+    try {
+      if (req.authType === 'api-token' && !req.apiTokenScopes.includes('workflows:run')) {
+        return res.status(403).json({ error: 'API token requires the workflows:run scope.' });
+      }
+      const result = WorkflowModel.removeExecution(req.params.id, req.params.runId);
+      if (result.status === 'workflow-not-found') return res.status(404).json({ error: 'Workflow not found.' });
+      if (result.status === 'run-not-found') return res.status(404).json({ error: 'Workflow run not found.' });
+      if (result.status === 'run-active') return res.status(409).json({ error: 'An active workflow run cannot be deleted.' });
+      res.json({ success: true, workflow: WorkflowModel.findById(req.params.id) });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -227,7 +241,9 @@ export const WorkflowController = {
   },
   remove: (req, res) => {
     try {
-      if (!WorkflowModel.delete(req.params.id)) return res.status(404).json({ error: 'Workflow not found' });
+      const result = WorkflowModel.delete(req.params.id);
+      if (result.status === 'not-found') return res.status(404).json({ error: 'Workflow not found' });
+      if (result.status === 'active') return res.status(409).json({ error: 'Cannot delete a workflow while a run is active.' });
       res.json({ success: true });
     } catch (err) { res.status(500).json({ error: err.message }); }
   },

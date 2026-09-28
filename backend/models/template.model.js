@@ -19,6 +19,9 @@ const syncTemplateFolder = (r) => {
   const tmpl = {
     ...r,
     type: r.type || 'ansible',
+    requiredVars: (() => {
+      try { return JSON.parse(r.requiredVars || '[]'); } catch { return []; }
+    })(),
     allowCliArgs: r.allowCliArgs === 1 || r.allowCliArgs === '1',
     totalRuns: parseInt(r.totalRuns || '0', 10)
   };
@@ -220,8 +223,8 @@ export const TemplateModel = {
     const folderPath = `backend/templates/${slug || id}`;
 
     const stmt = db.prepare(`
-      INSERT INTO templates (id, name, type, provider, terraformAction, winrmPort, winrmUseSsl, description, dbType, repositoryId, playbook, inventoryId, credentialId, environmentId, extraVars, "limit", tags, allowCliArgs, totalRuns, lastRunStatus, lastRunAt, createdAt, updatedAt, folderPath)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'never', NULL, ?, ?, ?)
+      INSERT INTO templates (id, name, type, provider, terraformAction, winrmPort, winrmUseSsl, description, dbType, repositoryId, playbook, inventoryId, credentialId, environmentId, extraVars, requiredVars, "limit", tags, allowCliArgs, totalRuns, lastRunStatus, lastRunAt, createdAt, updatedAt, folderPath)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'never', NULL, ?, ?, ?)
     `);
     stmt.run(
       id,
@@ -239,6 +242,7 @@ export const TemplateModel = {
       data.credentialId || null,
       data.environmentId || null,
       data.extraVars || '{}',
+      JSON.stringify(Array.isArray(data.requiredVars) ? data.requiredVars : []),
       data.limit || 'all',
       data.tags || '',
       data.allowCliArgs ? 1 : 0,
@@ -268,6 +272,7 @@ export const TemplateModel = {
     if (data.credentialId !== undefined) { fields.push('credentialId = ?'); values.push(data.credentialId); }
     if (data.environmentId !== undefined) { fields.push('environmentId = ?'); values.push(data.environmentId); }
     if (data.extraVars !== undefined) { fields.push('extraVars = ?'); values.push(data.extraVars); }
+    if (data.requiredVars !== undefined) { fields.push('requiredVars = ?'); values.push(JSON.stringify(Array.isArray(data.requiredVars) ? data.requiredVars : [])); }
     if (data.limit !== undefined) { fields.push('"limit" = ?'); values.push(data.limit); }
     if (data.tags !== undefined) { fields.push('tags = ?'); values.push(data.tags); }
     if (data.allowCliArgs !== undefined) { fields.push('allowCliArgs = ?'); values.push(data.allowCliArgs ? 1 : 0); }
@@ -288,15 +293,20 @@ export const TemplateModel = {
   },
 
   delete: (id) => {
-    try {
-      const tmpl = db.prepare('SELECT folderPath FROM templates WHERE id = ?').get(id);
-      if (tmpl && tmpl.folderPath) {
-        const fullPath = path.resolve(__dirname, '../../', tmpl.folderPath);
-        if (fs.existsSync(fullPath)) {
-          fs.rmSync(fullPath, { recursive: true, force: true });
-        }
+    const tmpl = db.prepare('SELECT name, folderPath FROM templates WHERE id = ?').get(id);
+    if (!tmpl) return false;
+    const slug = (tmpl.name || id).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+    const candidates = [
+      tmpl.folderPath ? path.resolve(__dirname, '../../', tmpl.folderPath) : null,
+      path.join(templatesDir, slug || id)
+    ].filter(Boolean);
+    for (const folderPath of new Set(candidates)) {
+      const relativePath = path.relative(templatesDir, folderPath);
+      if (!relativePath || relativePath.startsWith('..') || path.isAbsolute(relativePath)) {
+        throw new Error('Template folder path is outside the templates directory.');
       }
-    } catch (_) {}
+      fs.rmSync(folderPath, { recursive: true, force: true });
+    }
     const info = db.prepare('DELETE FROM templates WHERE id = ?').run(id);
     return info.changes > 0;
   }

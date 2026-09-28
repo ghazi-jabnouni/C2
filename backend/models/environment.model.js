@@ -46,8 +46,16 @@ export const EnvironmentModel = {
   },
 
   delete(id) {
-    db.prepare('DELETE FROM environments WHERE id = ?').run(id);
-    return { success: true };
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      db.prepare('UPDATE templates SET environmentId = NULL WHERE environmentId = ?').run(id);
+      const result = db.prepare('DELETE FROM environments WHERE id = ?').run(id);
+      db.exec('COMMIT');
+      return { success: result.changes > 0 };
+    } catch (error) {
+      try { db.exec('ROLLBACK'); } catch (_) {}
+      throw error;
+    }
   }
 };
 

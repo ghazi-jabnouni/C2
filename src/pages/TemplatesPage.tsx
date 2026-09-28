@@ -113,6 +113,7 @@ export const TemplatesPage: React.FC<TemplatesPageProps> = ({ initialActiveTaskI
   const [formInvId, setFormInvId] = useState('');
   const [formEnvId, setFormEnvId] = useState('');
   const [formExtraVars, setFormExtraVars] = useState('{\n  "version": "v1.0.0"\n}');
+  const [formRequiredVars, setFormRequiredVars] = useState('');
   const [formLimit, setFormLimit] = useState('all');
   const [formTags, setFormTags] = useState('');
 
@@ -352,6 +353,7 @@ export const TemplatesPage: React.FC<TemplatesPageProps> = ({ initialActiveTaskI
     setFormInvId(inventories[0]?.id || '');
     setFormEnvId(environments[0]?.id || '');
     setFormExtraVars('{\n  "backup_type": "full",\n  "compression": "zstd",\n  "verify_checksum": true\n}');
+    setFormRequiredVars('');
     setFormLimit('all');
     setFormTags('');
     setShowCreateModal(true);
@@ -379,6 +381,7 @@ export const TemplatesPage: React.FC<TemplatesPageProps> = ({ initialActiveTaskI
     setFormInvId(tmpl.inventoryId || '');
     setFormEnvId(tmpl.environmentId || '');
     setFormExtraVars(tmpl.extraVars || '{}');
+    setFormRequiredVars((tmpl.requiredVars || []).join('\n'));
     setFormLimit(tmpl.limit || 'all');
     setFormTags(tmpl.tags || '');
     setShowCreateModal(true);
@@ -415,6 +418,7 @@ export const TemplatesPage: React.FC<TemplatesPageProps> = ({ initialActiveTaskI
         inventoryId: formInvId,
         environmentId: formEnvId || null,
         extraVars: formExtraVars,
+        requiredVars: [...new Set(formRequiredVars.split(/\r?\n/).map((name) => name.trim()).filter(Boolean))],
         limit: formLimit,
         tags: formTags,
         allowCliArgs: true
@@ -1526,6 +1530,21 @@ export const TemplatesPage: React.FC<TemplatesPageProps> = ({ initialActiveTaskI
                   </div>
                 </>
               )}
+
+              <div>
+                <label className="form-label" htmlFor="template-required-vars">Required Variables</label>
+                <textarea
+                  id="template-required-vars"
+                  rows={3}
+                  value={formRequiredVars}
+                  onChange={(e) => setFormRequiredVars(e.target.value)}
+                  className="form-control"
+                  placeholder={'environment\nregion\ninstance_type'}
+                />
+                <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                  One variable name per line. Preflight checks template defaults, environment values, and workflow trigger values.
+                </span>
+              </div>
 
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 12 }}>
                 <button

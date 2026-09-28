@@ -1,0 +1,4 @@
+# Extra Variables for ping
+backup_type: "full"
+compression: "zstd"
+verify_checksum: true
