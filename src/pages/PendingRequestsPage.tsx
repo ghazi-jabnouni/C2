@@ -17,9 +17,10 @@ import { api } from '../services/api';
 
 interface PendingRequestsPageProps {
   onTaskApproved?: (taskId: string) => void;
+  onWorkflowApproved?: (workflowId: string) => void;
 }
 
-export const PendingRequestsPage: React.FC<PendingRequestsPageProps> = ({ onTaskApproved }) => {
+export const PendingRequestsPage: React.FC<PendingRequestsPageProps> = ({ onTaskApproved, onWorkflowApproved }) => {
   const [requests, setRequests] = useState<PendingRequest[]>([]);
   const [templates, setTemplates] = useState<TaskTemplate[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
@@ -63,6 +64,8 @@ export const PendingRequestsPage: React.FC<PendingRequestsPageProps> = ({ onTask
       const res = await api.approveRequest(req.id, 'admin@semaphore.io');
       if (res.task && onTaskApproved) {
         onTaskApproved(res.task.id);
+      } else if (res.workflowRun && res.workflowId && onWorkflowApproved) {
+        onWorkflowApproved(res.workflowId);
       }
       loadData();
     } catch (err) {
@@ -324,10 +327,10 @@ export const PendingRequestsPage: React.FC<PendingRequestsPageProps> = ({ onTask
                             className="btn btn-primary btn-sm"
                             style={{ backgroundColor: '#10b981', borderColor: '#10b981' }}
                             onClick={() => handleApprove(req)}
-                            title="Approve & Launch Playbook"
+                            title={req.itemType === 'workflow' ? 'Approve & Launch Workflow' : 'Approve & Launch Task'}
                           >
                             <Play size={12} fill="white" />
-                            <span>Approve</span>
+                            <span>Approve & Launch</span>
                           </button>
                           <button
                             className="btn btn-secondary btn-sm"
@@ -371,7 +374,7 @@ export const PendingRequestsPage: React.FC<PendingRequestsPageProps> = ({ onTask
               {reviewedList.map((r) => (
                 <tr key={r.id} style={{ borderBottom: '1px solid var(--border-color)' }}>
                   <td style={{ padding: '12px 14px' }}>
-                    <span className={`badge ${r.status === 'approved' ? 'badge-success' : 'badge-danger'}`}>
+                    <span className={`badge ${r.status === 'approved' ? 'badge-success' : r.status === 'approving' ? 'badge-running' : 'badge-danger'}`}>
                       {r.status.toUpperCase()}
                     </span>
                   </td>

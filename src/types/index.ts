@@ -139,7 +139,7 @@ export interface PendingRequest {
   itemType?: 'template' | 'workflow';
   workflowId?: string;
   submittedAt: string;
-  status: 'pending' | 'approved' | 'rejected';
+  status: 'pending' | 'approving' | 'approved' | 'rejected';
   requestedBy: string;
   extraVars: Record<string, any>;
   reason: string;
@@ -201,6 +201,9 @@ export interface WorkflowExecution {
   finishedAt: string | null;
   duration: string;
   triggeredBy: string;
+  serviceName?: string;
+  srNumber?: string;
+  handoffMessage?: string;
   totalStages: number;
   logs: string[];
 }
@@ -225,6 +228,7 @@ export interface MailSettings {
 export interface RuntimeSettings {
   maxConcurrentTasks: number;
   logRetentionDays: number;
+  serviceNames: string[];
   deletedLogs?: number;
 }
 

@@ -7,7 +7,7 @@ function parse(row) {
 }
 
 export const WorkflowRunModel = {
-  create({ workflowId, workflowName, triggeredBy, totalNodes, startNodeId }) {
+  create({ workflowId, workflowName, triggeredBy, totalNodes, startNodeId, serviceName, srNumber, handoffMessage }) {
     const id = `wfr-${crypto.randomUUID()}`;
     const now = new Date().toISOString();
     const run = {
@@ -19,6 +19,9 @@ export const WorkflowRunModel = {
       finishedAt: null,
       duration: 'running...',
       triggeredBy,
+      serviceName: serviceName || '',
+      srNumber: srNumber || '',
+      handoffMessage: handoffMessage || '',
       totalStages: 0,
       totalNodes,
       startNodeId: startNodeId || null,

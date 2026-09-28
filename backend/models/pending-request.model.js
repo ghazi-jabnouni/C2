@@ -41,6 +41,24 @@ export const PendingRequestModel = {
     return PendingRequestModel.findById(id);
   },
 
+  claimForApproval: (id, reviewedBy) => {
+    const result = db.prepare(`UPDATE pending_requests SET status = 'approving', reviewedBy = ? WHERE id = ? AND status = 'pending'`)
+      .run(reviewedBy || 'Admin', id);
+    return result.changes > 0 ? PendingRequestModel.findById(id) : null;
+  },
+
+  completeApproval: (id) => {
+    const now = new Date().toISOString();
+    const result = db.prepare(`UPDATE pending_requests SET status = 'approved', reviewedAt = ? WHERE id = ? AND status = 'approving'`)
+      .run(now, id);
+    return result.changes > 0 ? PendingRequestModel.findById(id) : null;
+  },
+
+  releaseApproval: (id) => {
+    db.prepare(`UPDATE pending_requests SET status = 'pending', reviewedBy = NULL WHERE id = ? AND status = 'approving'`)
+      .run(id);
+  },
+
   reject: (id, reviewedBy, rejectionReason) => {
     const now = new Date().toISOString();
     db.prepare(`UPDATE pending_requests SET status = 'rejected', reviewedBy = ?, reviewedAt = ?, rejectionReason = ? WHERE id = ? AND status = 'pending'`)

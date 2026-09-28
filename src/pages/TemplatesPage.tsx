@@ -31,6 +31,15 @@ import type {
 import { api } from '../services/api';
 import { TerminalLogViewer } from '../components/common/TerminalLogViewer';
 
+const getTaskServiceName = (task: TaskExecution): string => {
+  try {
+    const extraVars = JSON.parse(task.extraVars || '{}') as Record<string, unknown>;
+    return typeof extraVars.service_name === 'string' ? extraVars.service_name : '';
+  } catch {
+    return '';
+  }
+};
+
 // Helper to parse individual hostnames, IPs, and groups from inventory INI/YAML content
 const parseInventoryHostList = (content?: string): { host: string; ip?: string; group?: string }[] => {
   if (!content) return [];
@@ -804,7 +813,14 @@ export const TemplatesPage: React.FC<TemplatesPageProps> = ({ initialActiveTaskI
                             </span>
                           </td>
                           <td style={{ padding: '10px 12px', fontFamily: 'var(--font-mono)' }}>{t.id}</td>
-                          <td style={{ padding: '10px 12px' }}>{t.triggeredBy}</td>
+                          <td style={{ padding: '10px 12px' }}>
+                            <div>{t.triggeredBy}</div>
+                            {getTaskServiceName(t) && (
+                              <span className="badge badge-info" style={{ display: 'inline-flex', marginTop: 5 }}>
+                                {getTaskServiceName(t)}
+                              </span>
+                            )}
+                          </td>
                           <td style={{ padding: '10px 12px' }}>{t.duration}</td>
                           <td style={{ padding: '10px 12px' }}>
                             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>

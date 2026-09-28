@@ -165,7 +165,7 @@ export const api = {
       body: JSON.stringify(data)
     }),
   approveRequest: (id: string, reviewer?: string) =>
-    fetchJson<{ message: string; task?: TaskExecution }>(`/pending-requests/${id}/approve`, {
+    fetchJson<{ message: string; task?: TaskExecution; workflowRun?: WorkflowRun; workflowId?: string }>(`/pending-requests/${id}/approve`, {
       method: 'POST',
       body: JSON.stringify({ reviewer })
     }),
@@ -187,7 +187,15 @@ export const api = {
     fetchJson<Workflow>('/workflows', { method: 'POST', body: JSON.stringify(data) }),
   updateWorkflow: (id: string, data: Partial<Workflow>) =>
     fetchJson<Workflow>(`/workflows/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
-  startWorkflow: (id: string, data: { extraVars?: Record<string, unknown>; limit?: string; startNodeId?: string; triggeredBy?: string }) =>
+  startWorkflow: (id: string, data: {
+    extraVars?: Record<string, unknown>;
+    limit?: string;
+    startNodeId?: string;
+    triggeredBy?: string;
+    serviceName?: string;
+    srNumber?: string;
+    handoffMessage?: string;
+  }) =>
     fetchJson<{ message: string; run: WorkflowRun }>(`/workflows/${id}/run`, {
       method: 'POST',
       body: JSON.stringify(data)

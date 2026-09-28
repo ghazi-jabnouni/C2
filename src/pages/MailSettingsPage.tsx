@@ -14,7 +14,8 @@ const emptySettings: MailSettings = {
 
 const defaultRuntimeSettings: RuntimeSettings = {
   maxConcurrentTasks: 5,
-  logRetentionDays: 0
+  logRetentionDays: 0,
+  serviceNames: []
 };
 export const MailSettingsPage: React.FC = () => {
   const [settings, setSettings] = useState<MailSettings>(emptySettings);
@@ -31,7 +32,11 @@ export const MailSettingsPage: React.FC = () => {
     Promise.all([api.getMailSettings(), api.getRuntimeSettings()])
       .then(([mail, runtime]) => {
         setSettings(mail);
-        setRuntimeSettings(runtime);
+        setRuntimeSettings({
+          ...defaultRuntimeSettings,
+          ...runtime,
+          serviceNames: Array.isArray(runtime.serviceNames) ? runtime.serviceNames : []
+        });
       })
       .catch((error) => setNotice({ kind: 'error', text: error instanceof Error ? error.message : String(error) }))
       .finally(() => setIsLoading(false));
@@ -89,9 +94,14 @@ export const MailSettingsPage: React.FC = () => {
     try {
       const saved = await api.saveRuntimeSettings({
         maxConcurrentTasks: Number(runtimeSettings.maxConcurrentTasks),
-        logRetentionDays: Number(runtimeSettings.logRetentionDays)
+        logRetentionDays: Number(runtimeSettings.logRetentionDays),
+        serviceNames: runtimeSettings.serviceNames
       });
-      setRuntimeSettings(saved);
+      setRuntimeSettings({
+        ...defaultRuntimeSettings,
+        ...saved,
+        serviceNames: Array.isArray(saved.serviceNames) ? saved.serviceNames : runtimeSettings.serviceNames
+      });
       setNotice({
         kind: 'success',
         text: `Runtime settings saved.${saved.deletedLogs ? ` Removed ${saved.deletedLogs} expired task or workflow run log(s).` : ''}`
@@ -212,6 +222,22 @@ export const MailSettingsPage: React.FC = () => {
             />
             <span style={{ display: 'block', marginTop: 5, color: 'var(--text-muted)', fontSize: '0.73rem', fontWeight: 400 }}>
               Enter 0 to keep history indefinitely. Saving a retention period prunes expired completed runs now and daily thereafter.
+            </span>
+          </label>
+          <label className="form-label" style={{ gridColumn: '1 / -1' }}>
+            Service names
+            <textarea
+              className="form-control"
+              rows={3}
+              value={runtimeSettings.serviceNames.join('\n')}
+              onChange={(event) => setRuntimeSettings((current) => ({
+                ...current,
+                serviceNames: [...new Set(event.target.value.split('\n').map((name) => name.trim()).filter(Boolean))]
+              }))}
+              placeholder={'Application X\nCustomer Portal'}
+            />
+            <span style={{ display: 'block', marginTop: 5, color: 'var(--text-muted)', fontSize: '0.73rem', fontWeight: 400 }}>
+              One service per line. These names are suggested when starting a workflow.
             </span>
           </label>
         </div>

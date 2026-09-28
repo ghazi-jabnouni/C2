@@ -89,6 +89,11 @@ export const AppContent: React.FC = () => {
     setCurrentTab('templates');
   };
 
+  const handleWorkflowApproved = (id: string) => {
+    setWorkflowId(id);
+    setCurrentTab('workflow-diagram');
+  };
+
   const handleOpenTemplates = (databaseType?: string) => {
     setFocusTaskId(null);
     setCurrentTab(databaseType ? `templates:${databaseType}` : 'templates');
@@ -139,7 +144,7 @@ export const AppContent: React.FC = () => {
       case 'schedules':
         return <SchedulesPage />;
       case 'pending-requests':
-        return <PendingRequestsPage onTaskApproved={handleTaskApproved} />;
+        return <PendingRequestsPage onTaskApproved={handleTaskApproved} onWorkflowApproved={handleWorkflowApproved} />;
       case 'api-tokens':
         return <ApiTokensPage />;
       case 'users':

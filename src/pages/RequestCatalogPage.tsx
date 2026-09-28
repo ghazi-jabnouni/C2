@@ -39,6 +39,8 @@ export const RequestCatalogPage: React.FC = () => {
   const [requesterName, setRequesterName] = useState(user?.name || 'Requester User');
   const [requesterEmail, setRequesterEmail] = useState(user?.email || 'requester@c2platform.local');
   const [reason, setReason] = useState('Deployment and testing request');
+  const [srNumber, setSrNumber] = useState('');
+  const [handoffMessage, setHandoffMessage] = useState('');
   const [varPairs, setVarPairs] = useState<VariablePair[]>([
     { key: 'environment', value: 'staging' },
     { key: 'release_version', value: 'v2.4.0' }
@@ -69,9 +71,26 @@ export const RequestCatalogPage: React.FC = () => {
     const endpoint = itemType === 'template'
       ? `/api/templates/${item.id}/run`
       : `/api/workflows/${item.id}/run`;
+    const serviceName = item.name;
+    const srNumberExample = 'SR-123';
+    const handoffMessageExample = `Install an instance for ${serviceName}`;
     const body = itemType === 'template'
-      ? { extraVars: {}, limit: 'all', triggeredBy: 'API' }
-      : { extraVars: {}, triggeredBy: 'API' };
+      ? {
+          extraVars: {
+            service_name: serviceName,
+            sr_number: srNumberExample,
+            handoff_message: handoffMessageExample
+          },
+          limit: 'all',
+          triggeredBy: 'API'
+        }
+      : {
+          serviceName,
+          srNumber: srNumberExample,
+          handoffMessage: handoffMessageExample,
+          extraVars: {},
+          triggeredBy: 'API'
+        };
     const command = `curl -X POST "${endpoint}" -H "Content-Type: application/json" -H "Authorization: Bearer YOUR_API_TOKEN" -d '${JSON.stringify(body)}'`;
 
     try {
@@ -86,6 +105,8 @@ export const RequestCatalogPage: React.FC = () => {
     setRequestItemType('template');
     setSelectedTemplate(template);
     setSelectedWorkflow(null);
+    setSrNumber('');
+    setHandoffMessage('');
 
     // Pre-fill extra vars if available
     let parsedVars: Record<string, any> = {};
@@ -116,6 +137,8 @@ export const RequestCatalogPage: React.FC = () => {
     setRequestItemType('workflow');
     setSelectedWorkflow(workflow);
     setSelectedTemplate(null);
+    setSrNumber('');
+    setHandoffMessage('');
 
     setVarPairs([
       { key: 'pipeline_target', value: 'staging' },
@@ -160,6 +183,16 @@ export const RequestCatalogPage: React.FC = () => {
           }
         });
       }
+
+      const serviceName = requestItemType === 'workflow'
+        ? selectedWorkflow?.name || ''
+        : selectedTemplate?.name || '';
+      finalExtraVars = {
+        ...finalExtraVars,
+        service_name: serviceName,
+        sr_number: srNumber.trim(),
+        handoff_message: handoffMessage.trim()
+      };
 
       const templateId = requestItemType === 'template' ? selectedTemplate?.id || '' : (selectedWorkflow?.nodes[0]?.templateId || '');
       const templateName = requestItemType === 'template' ? (selectedTemplate?.name || 'Task Request') : `Workflow: ${selectedWorkflow?.name || 'DAG Pipeline'}`;
@@ -431,6 +464,31 @@ export const RequestCatalogPage: React.FC = () => {
                   onChange={(e) => setReason(e.target.value)}
                   className="form-control"
                 />
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 200px), 1fr))', gap: 12 }}>
+                <label className="form-label">
+                  SR Number
+                  <input
+                    type="text"
+                    required
+                    value={srNumber}
+                    onChange={(event) => setSrNumber(event.target.value)}
+                    className="form-control"
+                    placeholder="e.g. SR-123"
+                  />
+                </label>
+                <label className="form-label" style={{ gridColumn: '1 / -1' }}>
+                  Message to pass to the team
+                  <textarea
+                    required
+                    rows={3}
+                    value={handoffMessage}
+                    onChange={(event) => setHandoffMessage(event.target.value)}
+                    className="form-control"
+                    placeholder={`e.g. Install an instance for ${requestItemType === 'workflow' ? selectedWorkflow?.name || 'Application X' : selectedTemplate?.name || 'Application X'}`}
+                  />
+                </label>
               </div>
 
               {/* Custom Parameter Variables Editor */}

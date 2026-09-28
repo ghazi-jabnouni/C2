@@ -26,7 +26,7 @@ import {
   Maximize2,
   Search
 } from 'lucide-react';
-import type { Workflow, WorkflowNode, WorkflowEdge, TaskTemplate, TaskExecution, WorkflowRun } from '../types';
+import type { Workflow, WorkflowNode, WorkflowEdge, TaskTemplate, TaskExecution, WorkflowExecution, WorkflowRun, RuntimeSettings } from '../types';
 import { api } from '../services/api';
 
 interface WorkflowDiagramPageProps {
@@ -107,6 +107,20 @@ const parseWorkflowTriggerVariables = (value: string): Record<string, unknown> =
   return parsed as Record<string, unknown>;
 };
 
+const getWorkflowRequestDetails = (run: WorkflowExecution) => {
+  const logs = Array.isArray(run.logs) ? run.logs : [];
+  const requestLog = logs.find((line) => line.includes('[REQUEST]')) || '';
+  const requestText = requestLog.split('[REQUEST]').pop()?.trim() || '';
+  const requestMatch = requestText.match(/^(.*?)\s+\|\s+SR\s+(.+)$/i);
+  const handoffLog = logs.find((line) => line.includes('[HANDOFF MESSAGE]')) || '';
+
+  return {
+    serviceName: run.serviceName || requestMatch?.[1] || requestText,
+    srNumber: run.srNumber || requestMatch?.[2] || '',
+    handoffMessage: run.handoffMessage || handoffLog.split('[HANDOFF MESSAGE]').pop()?.trim() || ''
+  };
+};
+
 export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workflowId, onBack }) => {
   
   const [templates, setTemplates] = useState<TaskTemplate[]>([]);
@@ -121,6 +135,10 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
   const [workflowLimit, setWorkflowLimit] = useState('all');
   const [workflowStartNodeId, setWorkflowStartNodeId] = useState('');
   const [workflowTriggerVariablesJson, setWorkflowTriggerVariablesJson] = useState('{}');
+  const [serviceNames, setServiceNames] = useState<string[]>([]);
+  const [serviceName, setServiceName] = useState('');
+  const [srNumber, setSrNumber] = useState('');
+  const [handoffMessage, setHandoffMessage] = useState('');
   const [showWorkflowTriggerVariables, setShowWorkflowTriggerVariables] = useState(false);
   const [executionLogs, setExecutionLogs] = useState<string[]>([]);
   const [showAddNodeModal, setShowAddNodeModal] = useState(false);
@@ -218,10 +236,14 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
   const loadData = async () => {
     if (!workflowId) return;
     try {
-      const [wfs, tmpls] = await Promise.all([
+      const [wfs, tmpls, settings] = await Promise.all([
         api.getWorkflows(),
-        api.getTemplates()
+        api.getTemplates(),
+        api.getRuntimeSettings()
       ]);
+      const runtimeSettings = settings as RuntimeSettings;
+      setServiceNames(runtimeSettings.serviceNames || []);
+      setServiceName((current) => current || runtimeSettings.serviceNames?.[0] || '');
       
       const wf = wfs.find(w => w.id === workflowId);
       if (wf) {
@@ -384,6 +406,9 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
           duration: run.duration,
           triggeredBy: run.triggeredBy,
           totalStages: run.totalStages,
+          serviceName: run.serviceName,
+          srNumber: run.srNumber,
+          handoffMessage: run.handoffMessage,
           logs: run.logs
         };
         return {
@@ -422,11 +447,11 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
       socket.onerror = () => socket?.close();
     };
 
-    connect();
+    reconnectTimer = window.setTimeout(connect, 0);
     return () => {
       disposed = true;
       if (reconnectTimer) window.clearTimeout(reconnectTimer);
-      socket?.close();
+      if (socket?.readyState === WebSocket.OPEN) socket.close();
     };
   }, [workflowId]);
 
@@ -1058,6 +1083,11 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
 
   const handleRunWorkflow = () => {
     if (!selectedWf || isRunning) return;
+    if (!serviceName.trim() || !srNumber.trim() || !handoffMessage.trim()) {
+      setShowWorkflowTriggerVariables(true);
+      setExecutionLogs([`[${new Date().toLocaleTimeString()}] [REQUEST DETAILS REQUIRED] Enter the service name, SR number, and handoff message before starting.`]);
+      return;
+    }
     if (selectedWf.nodes.length > 0) {
       const currentWf = selectedWf;
       let triggerVariables: Record<string, unknown>;
@@ -1067,13 +1097,22 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
         setExecutionLogs([`[${new Date().toLocaleTimeString()}] [ERROR] ${error instanceof Error ? error.message : String(error)}`]);
         return;
       }
+      triggerVariables = {
+        ...triggerVariables,
+        service_name: serviceName.trim(),
+        sr_number: srNumber.trim(),
+        handoff_message: handoffMessage.trim()
+      };
       setIsRunning(true);
       setExecutionLogs([`[${new Date().toLocaleTimeString()}] [WORKFLOW ENGINE] Starting backend execution for "${currentWf.name}"...`]);
       api.startWorkflow(currentWf.id, {
         extraVars: triggerVariables,
         limit: workflowLimit || 'all',
         startNodeId: workflowStartNodeId || undefined,
-        triggeredBy: 'admin'
+        triggeredBy: 'admin',
+        serviceName: serviceName.trim(),
+        srNumber: srNumber.trim(),
+        handoffMessage: handoffMessage.trim()
       }).then(({ run }) => {
         localStorage.setItem(`workflow-run:${currentWf.id}`, run.id);
         setActiveWorkflowRunId(run.id);
@@ -1093,6 +1132,12 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
       setExecutionLogs([`[${new Date().toLocaleTimeString()}] [ERROR] ${error instanceof Error ? error.message : String(error)}`]);
       return;
     }
+      triggerVariables = {
+        ...triggerVariables,
+        service_name: serviceName.trim(),
+        sr_number: srNumber.trim(),
+        handoff_message: handoffMessage.trim()
+      };
     
     if (currentWf.nodes.length === 0) {
       setExecutionLogs([
@@ -1512,10 +1557,12 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
   if (showWorkflowHistoryPage) {
     const runs = selectedWf.executionHistory || [];
     const query = workflowHistorySearch.trim().toLowerCase();
-    const filteredRuns = runs.filter((run) =>
-      [run.id, run.status, run.triggeredBy, run.startedAt, new Date(run.startedAt).toLocaleString()]
+    const filteredRuns = runs.filter((run) => {
+      const details = getWorkflowRequestDetails(run);
+      return [run.id, run.status, run.triggeredBy, details.serviceName, details.srNumber, details.handoffMessage, run.startedAt, new Date(run.startedAt).toLocaleString()]
         .some((value) => value.toLowerCase().includes(query))
-    );
+    });
+    const runsWithDetails = filteredRuns.map((run) => ({ ...run, requestDetails: getWorkflowRequestDetails(run) }));
 
     return (
       <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
@@ -1558,12 +1605,13 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
                     <th style={{ padding: '12px 14px' }}>DURATION</th>
                     <th style={{ padding: '12px 14px' }}>STAGES</th>
                     <th style={{ padding: '12px 14px' }}>TRIGGERED BY</th>
+                    <th style={{ padding: '12px 14px' }}>SR / REQUEST MESSAGE</th>
                     <th style={{ padding: '12px 14px' }}>EXECUTION ID</th>
                     <th style={{ padding: '12px 14px', textAlign: 'right' }}>LOGS</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredRuns.map((run) => (
+                  {runsWithDetails.map((run) => (
                     <React.Fragment key={run.id}>
                       <tr style={{ borderBottom: '1px solid var(--border-color)', color: 'var(--text-primary)' }}>
                         <td style={{ padding: '12px 14px', whiteSpace: 'nowrap' }}>{new Date(run.startedAt).toLocaleString()}</td>
@@ -1574,7 +1622,19 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
                         </td>
                         <td style={{ padding: '12px 14px', whiteSpace: 'nowrap' }}>{run.duration}</td>
                         <td style={{ padding: '12px 14px' }}>{run.totalStages}</td>
-                        <td style={{ padding: '12px 14px' }}>{run.triggeredBy}</td>
+                        <td style={{ padding: '12px 14px' }}>
+                          {run.triggeredBy}
+                          {run.requestDetails.serviceName && (
+                            <div style={{ marginTop: 4, color: 'var(--text-muted)', fontSize: '0.72rem' }}>
+                              {run.requestDetails.serviceName}
+                            </div>
+                          )}
+                        </td>
+                        <td style={{ padding: '12px 14px', minWidth: 220, maxWidth: 340, whiteSpace: 'normal', overflowWrap: 'anywhere' }}>
+                          {run.requestDetails.srNumber && <strong>SR {run.requestDetails.srNumber}</strong>}
+                          {run.requestDetails.handoffMessage && <div style={{ marginTop: 4, color: 'var(--text-muted)' }}>{run.requestDetails.handoffMessage}</div>}
+                          {!run.requestDetails.srNumber && !run.requestDetails.handoffMessage && <span style={{ color: 'var(--text-muted)' }}>No request details</span>}
+                        </td>
                         <td style={{ padding: '12px 14px', fontFamily: 'var(--font-mono)', fontSize: '0.75rem' }}>{run.id}</td>
                         <td style={{ padding: '8px 14px', textAlign: 'right' }}>
                           <button
@@ -1589,7 +1649,12 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
                       </tr>
                       {expandedWorkflowRunId === run.id && (
                         <tr>
-                          <td colSpan={7} style={{ padding: '0 14px 14px' }}>
+                          <td colSpan={8} style={{ padding: '0 14px 14px' }}>
+                            {run.requestDetails.handoffMessage && (
+                              <div style={{ marginBottom: 8, padding: '9px 12px', borderLeft: '3px solid var(--accent-primary)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', fontSize: '0.82rem' }}>
+                                <strong>Handoff message:</strong> {run.requestDetails.handoffMessage}
+                              </div>
+                            )}
                             <div style={{ backgroundColor: 'var(--terminal-bg)', color: 'var(--terminal-text)', borderRadius: 6, padding: '12px 14px', fontFamily: 'var(--font-mono)', fontSize: '0.75rem', lineHeight: 1.5, maxHeight: 360, overflowY: 'auto' }}>
                               {Array.isArray(run.logs) && run.logs.length > 0 ? run.logs.map((logLine, index) => (
                                 <div key={index} style={{ color: logLine.includes('SUCCESS') ? '#34d399' : '#cbd5e1' }}>{logLine}</div>
@@ -1683,10 +1748,10 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
             className="btn btn-secondary"
             onClick={() => setShowWorkflowTriggerVariables(true)}
             disabled={isRunning}
-            title="Set JSON values for this workflow run"
+            title="Set service, SR, handoff message, and additional trigger values"
           >
             <Braces size={14} />
-            <span>Trigger vars</span>
+            <span>Request details</span>
           </button>
           <select
             className="form-control"
@@ -2649,17 +2714,50 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
 
       {showWorkflowTriggerVariables && (
         <div className="modal-overlay">
-          <div className="modal-content animate-fade-in" style={{ padding: 24, maxWidth: 560 }}>
+          <div className="modal-content animate-fade-in" style={{ padding: 24, maxWidth: 680 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
                 <Braces size={18} style={{ color: 'var(--accent-primary)' }} />
-                <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 800 }}>Workflow Trigger Variables</h3>
+                <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 800 }}>Request and trigger details</h3>
               </div>
               <button onClick={() => setShowWorkflowTriggerVariables(false)} style={{ background: 'none', border: 0, color: 'var(--text-muted)', cursor: 'pointer' }} title="Close">
                 <X size={20} />
               </button>
             </div>
-            <label className="form-label" htmlFor="workflow-trigger-variables">Variables (JSON object)</label>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 210px), 1fr))', gap: 12, marginBottom: 16 }}>
+              <label className="form-label" htmlFor="workflow-service-name">
+                Service name
+                <input
+                  id="workflow-service-name"
+                  className="form-control"
+                  list="workflow-service-options"
+                  value={serviceName}
+                  onChange={(event) => setServiceName(event.target.value)}
+                  placeholder="Application X"
+                  required
+                />
+                <datalist id="workflow-service-options">
+                  {serviceNames.map((name) => <option key={name} value={name} />)}
+                </datalist>
+              </label>
+              <label className="form-label" htmlFor="workflow-sr-number">
+                SR number
+                <input id="workflow-sr-number" className="form-control" value={srNumber} onChange={(event) => setSrNumber(event.target.value)} placeholder="123" required />
+              </label>
+            </div>
+            <label className="form-label" htmlFor="workflow-handoff-message">
+              Message to pass to each task
+              <textarea
+                id="workflow-handoff-message"
+                className="form-control"
+                rows={3}
+                value={handoffMessage}
+                onChange={(event) => setHandoffMessage(event.target.value)}
+                placeholder="Install an instance for Application X"
+                required
+              />
+            </label>
+            <label className="form-label" htmlFor="workflow-trigger-variables" style={{ marginTop: 14 }}>Additional variables (JSON object)</label>
             <textarea
               id="workflow-trigger-variables"
               className="form-control"
@@ -2671,7 +2769,19 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
               placeholder={'{\n  "token": "...",\n  "environment": "production"\n}'}
             />
             <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}>
-              <button className="btn btn-primary" onClick={() => setShowWorkflowTriggerVariables(false)}>Done</button>
+              <button
+                className="btn btn-primary"
+                type="button"
+                onClick={() => {
+                  if (!serviceName.trim() || !srNumber.trim() || !handoffMessage.trim()) return;
+                  setShowWorkflowTriggerVariables(false);
+                  handleRunWorkflow();
+                }}
+                disabled={!serviceName.trim() || !srNumber.trim() || !handoffMessage.trim() || isRunning}
+              >
+                <Play size={14} fill="white" />
+                <span>Save and execute</span>
+              </button>
             </div>
           </div>
         </div>

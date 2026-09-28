@@ -1,0 +1,13 @@
+{
+  "target_pc ": "127.0.0.1",
+  "backup_type": "full",
+  "compression": "zstd",
+  "verify_checksum": true,
+  "service_name": "X",
+  "sr_number": "12333",
+  "handoff_message": "install OBM",
+  "ansible_connection": "local",
+  "credential_type": "password",
+  "credential_name": "z server",
+  "ansible_user": "root"
+}

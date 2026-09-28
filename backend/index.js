@@ -40,14 +40,6 @@ app.use(express.json());
 
 console.log('✅ JSON parser configured');
 
-// Simple request logger to help debug route issues
-app.use((req, res, next) => {
-  try {
-    console.log(`[HTTP] ${req.method} ${req.url} - headers:`, { authorization: req.headers.authorization ? '[redacted]' : undefined });
-  } catch (_) {}
-  next();
-});
-
 console.log('📦 Step 5: Loading routes...');
 
 let scheduleRunner;

@@ -311,9 +311,11 @@ try {
       id INTEGER PRIMARY KEY CHECK (id = 1),
       maxConcurrentTasks INTEGER NOT NULL DEFAULT 5,
       logRetentionDays INTEGER NOT NULL DEFAULT 30,
+      serviceNames TEXT NOT NULL DEFAULT '[]',
       updatedAt TEXT
     );
   `);
+  try { db.exec("ALTER TABLE runtime_settings ADD COLUMN serviceNames TEXT NOT NULL DEFAULT '[]'"); } catch {}
 } catch (error) {
   console.error('❌ [DB] Failed to create runtime settings table');
   console.error(error);
@@ -356,9 +358,14 @@ try {
       reason TEXT DEFAULT '',
       reviewedBy TEXT,
       reviewedAt TEXT,
-      rejectionReason TEXT
+      rejectionReason TEXT,
+      itemType TEXT NOT NULL DEFAULT 'template',
+      workflowId TEXT
     );
   `);
+  for (const [column, definition] of [['itemType', "TEXT NOT NULL DEFAULT 'template'"], ['workflowId', 'TEXT']]) {
+    try { db.exec(`ALTER TABLE pending_requests ADD COLUMN "${column}" ${definition}`); } catch {}
+  }
   console.log('✅ [DB] Pending requests table ready');
 } catch (error) {
   console.error('❌ [DB] Failed to create pending_requests table');

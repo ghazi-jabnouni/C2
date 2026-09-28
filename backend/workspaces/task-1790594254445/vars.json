@@ -1,0 +1,13 @@
+{
+  "target_pc ": "127.0.0.1",
+  "backup_type": "full",
+  "compression": "zstd",
+  "verify_checksum": true,
+  "service_name": "XAD",
+  "sr_number": "123",
+  "handoff_message": "zd",
+  "ansible_connection": "local",
+  "credential_type": "password",
+  "credential_name": "z server",
+  "ansible_user": "root"
+}

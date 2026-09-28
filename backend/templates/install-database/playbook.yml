@@ -1,0 +1,8 @@
+# Ansible Playbook for install database
+- name: Execute install database Playbook (postgresql)
+  hosts: all
+  gather_facts: yes
+  tasks:
+    - name: Verify database engine connectivity
+      debug:
+        msg: "Running playbook playbooks/site.yml on {{ inventory_hostname }}"

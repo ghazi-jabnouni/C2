@@ -153,7 +153,10 @@ export const WorkflowController = {
         extraVars,
         limit: req.body?.limit || 'all',
         startNodeId: req.body?.startNodeId,
-        triggeredBy: req.body?.triggeredBy || 'API'
+        triggeredBy: req.body?.triggeredBy || 'API',
+        serviceName: req.body?.serviceName || extraVars.service_name,
+        srNumber: req.body?.srNumber || extraVars.sr_number,
+        handoffMessage: req.body?.handoffMessage || extraVars.handoff_message
       });
       res.status(202).json({ message: 'Workflow execution started', run });
     } catch (err) {

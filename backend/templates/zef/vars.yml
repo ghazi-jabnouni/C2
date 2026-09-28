@@ -1,0 +1,4 @@
+# Extra Variables for zef
+backup_type: "full"
+compression: "zstd"
+verify_checksum: true

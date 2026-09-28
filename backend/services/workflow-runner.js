@@ -47,6 +47,10 @@ async function waitForApproval(runId, workflow, node) {
 
 async function runPlaybook(runId, workflow, node, variables, limit) {
   if (!node.templateId) throw new Error(`Playbook node '${node.label}' has no task template.`);
+  if (variables.service_name || variables.sr_number) {
+    appendLog(runId, `[TASK CONTEXT] ${variables.service_name || 'Service not specified'}${variables.sr_number ? ` | SR ${variables.sr_number}` : ''}`);
+  }
+  if (variables.handoff_message) appendLog(runId, `[HANDOFF MESSAGE] ${variables.handoff_message}`);
   const task = startTemplateExecution(node.templateId, {
     extraVars: variables,
     limit: limit || 'all',
@@ -212,16 +216,32 @@ export const WorkflowRunner = {
       error.statusCode = 400;
       throw error;
     }
+    const serviceName = String(options.serviceName || options.extraVars?.service_name || '').trim();
+    const srNumber = String(options.srNumber || options.extraVars?.sr_number || '').trim();
+    const handoffMessage = String(options.handoffMessage || options.extraVars?.handoff_message || '').trim();
+    const extraVars = {
+      ...(options.extraVars || {}),
+      ...(serviceName ? { service_name: serviceName } : {}),
+      ...(srNumber ? { sr_number: srNumber } : {}),
+      ...(handoffMessage ? { handoff_message: handoffMessage } : {})
+    };
     const run = WorkflowRunModel.create({
       workflowId: workflow.id,
       workflowName: workflow.name,
       triggeredBy: options.triggeredBy || 'API',
       totalNodes: workflow.nodes.length,
-      startNodeId: options.startNodeId
+      startNodeId: options.startNodeId,
+      serviceName,
+      srNumber,
+      handoffMessage
     });
+    if (serviceName || srNumber) {
+      appendLog(run.id, `[REQUEST] ${serviceName || 'Service not specified'}${srNumber ? ` | SR ${srNumber}` : ''}`);
+    }
+    if (handoffMessage) appendLog(run.id, `[HANDOFF MESSAGE] ${handoffMessage}`);
     WorkflowModel.recordExecution(workflow.id, run);
     publish(run);
-    setImmediate(() => void executeRun(run.id, workflow, options));
+    setImmediate(() => void executeRun(run.id, workflow, { ...options, extraVars }));
     return run;
   },
 
