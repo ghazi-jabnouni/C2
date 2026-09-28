@@ -15,13 +15,20 @@ export const PendingRequestController = {
 
   create: (req, res) => {
     try {
-      const { templateId, workflowId } = req.body;
+      const data = req.body;
+      if (!data || typeof data !== 'object' || Array.isArray(data)) {
+        return res.status(400).json({ error: 'Request body must be a JSON object.' });
+      }
+      const { templateId, workflowId } = data;
       if (!templateId && !workflowId) return res.status(400).json({ error: 'templateId or workflowId is required' });
-      const created = PendingRequestModel.create(req.body);
+      if (data.extraVars !== undefined && (!data.extraVars || typeof data.extraVars !== 'object' || Array.isArray(data.extraVars))) {
+        return res.status(400).json({ error: 'extraVars must be a JSON object.' });
+      }
+      const created = PendingRequestModel.create(data);
       res.status(201).json(created);
     } catch (err) {
-      console.error(err);
-      res.status(500).json({ error: 'Failed to create pending request' });
+      console.error('[pending-request:create] Failed to create request:', err);
+      res.status(500).json({ error: err instanceof Error ? err.message : 'Failed to create pending request' });
     }
   },
 

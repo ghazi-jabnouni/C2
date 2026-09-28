@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import db from '../config/db.js';
 
 export const PendingRequestModel = {
@@ -10,7 +11,7 @@ export const PendingRequestModel = {
   },
 
   create: (data) => {
-    const id = `req-${Date.now()}`;
+    const id = `req-${crypto.randomUUID()}`;
     const now = new Date().toISOString();
     const itemType = data.itemType || 'template';
     const workflowId = data.workflowId || null;
