@@ -40,15 +40,15 @@ export const TaskController = {
       res.json({ success: true });
     } catch (err) {
       console.error(err);
-      res.status(500).json({ error: 'Failed to delete task' });
+      res.status(err.statusCode || 500).json({ error: err.message || 'Failed to delete task and workspace files' });
     }
   },
 
   clearHistory: (req, res) => {
     try {
       const templateId = req.query.templateId || req.body?.templateId || null;
-      TaskModel.clearHistory(templateId);
-      res.json({ success: true });
+      const deleted = TaskModel.clearHistory(templateId);
+      res.json({ success: true, deleted });
     } catch (err) {
       console.error(err);
       res.status(500).json({ error: 'Failed to clear task history' });

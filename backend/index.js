@@ -43,7 +43,7 @@ console.log('✅ JSON parser configured');
 // Simple request logger to help debug route issues
 app.use((req, res, next) => {
   try {
-    console.log(`[HTTP] ${req.method} ${req.url} - headers:`, { authorization: req.headers.authorization });
+    console.log(`[HTTP] ${req.method} ${req.url} - headers:`, { authorization: req.headers.authorization ? '[redacted]' : undefined });
   } catch (_) {}
   next();
 });
@@ -52,6 +52,7 @@ console.log('📦 Step 5: Loading routes...');
 
 let scheduleRunner;
 let runtimeSettingsService;
+let workflowRunner;
 
 try {
   const { default: authRoutes } = await import('./routes/auth.routes.js');
@@ -63,6 +64,8 @@ try {
   const { default: invRoutes } = await import('./routes/inventory.routes.js');
   const { default: databaseTypeRoutes } = await import('./routes/database-type.routes.js');
   const { default: workflowRoutes } = await import('./routes/workflow.routes.js');
+  const { WorkflowRunner } = await import('./services/workflow-runner.js');
+  workflowRunner = WorkflowRunner;
   const { default: tokenRoutes } = await import('./routes/token.routes.js');
   const { default: templateRoutes } = await import('./routes/template.routes.js');
   const { default: taskRoutes } = await import('./routes/task.routes.js');
@@ -114,6 +117,8 @@ try {
 
   scheduleRunner.initialize();
   runtimeSettingsService.start();
+  const interruptedWorkflowRuns = workflowRunner.recoverInterruptedRuns();
+  if (interruptedWorkflowRuns.length > 0) console.warn(`[workflow] Marked ${interruptedWorkflowRuns.length} interrupted run(s) as failed`);
 
   console.log('✅ Auth routes loaded');
   console.log('✅ User routes loaded');
@@ -176,6 +181,36 @@ const wss = new WebSocketServer({ server, path: '/ws' });
 wss.on('connection', async (ws, req) => {
   try {
     const urlParams = new URLSearchParams(req.url?.split('?')[1] || '');
+    const workflowId = urlParams.get('workflowId');
+    const workflowRunId = urlParams.get('workflowRunId');
+    if (workflowId || workflowRunId) {
+      const { AuthController } = await import('./controllers/auth.controller.js');
+      const token = urlParams.get('token');
+      const socketAuth = AuthController.getAuthForToken(token);
+      if (!socketAuth || (socketAuth.type === 'api-token' && !socketAuth.scopes.some((scope) => scope === 'workflows:read' || scope === 'workflows:run'))) {
+        ws.send(JSON.stringify({ type: 'ERROR', message: 'Authentication required' }));
+        ws.close();
+        return;
+      }
+      const [{ WorkflowRunModel }, { WorkflowRunEvents }] = await Promise.all([
+        import('./models/workflow-run.model.js'),
+        import('./services/workflow-run-events.js')
+      ]);
+      if (workflowId) WorkflowRunEvents.subscribeWorkflow(workflowId, ws);
+      if (workflowRunId) WorkflowRunEvents.subscribe(workflowRunId, ws);
+      const run = workflowRunId
+        ? WorkflowRunModel.findById(workflowRunId)
+        : WorkflowRunModel.findByWorkflow(workflowId)[0];
+      if (!run && workflowRunId) {
+        ws.send(JSON.stringify({ type: 'ERROR', message: 'Workflow run not found' }));
+        ws.close();
+        return;
+      }
+      if (run && (!workflowId || run.workflowId === workflowId)) {
+        ws.send(JSON.stringify({ type: 'INIT_WORKFLOW_RUN', run }));
+      }
+      return;
+    }
     const taskId = urlParams.get('taskId');
 
     if (!taskId) {

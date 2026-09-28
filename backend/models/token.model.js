@@ -17,6 +17,8 @@ export const TokenModel = {
 
   findByPrefix: (prefix) => db.prepare('SELECT * FROM tokens WHERE tokenPrefix = ?').get(prefix),
 
+  touch: (id) => db.prepare('UPDATE tokens SET lastUsedAt = ? WHERE id = ?').run(new Date().toISOString(), id),
+
   create: ({ name, scopes, expiresAt } = {}) => {
     const id = `tok-${Date.now()}`;
     const prefix = genPrefix();

@@ -1,8 +1,0 @@
-{
-  "channels": 4,
-  "backup_type": "full_database",
-  "max_allowed_lag_seconds": 30,
-  "ansible_connection": "local",
-  "ansible_user": "root",
-  "ansible_password": "root"
-}

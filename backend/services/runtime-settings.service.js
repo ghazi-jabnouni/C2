@@ -1,5 +1,7 @@
 import { RuntimeSettingsModel } from '../models/runtime-settings.model.js';
 import { TaskModel } from '../models/task.model.js';
+import { WorkflowModel } from '../models/workflow.model.js';
+import { WorkflowRunModel } from '../models/workflow-run.model.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 let cleanupTimer;
@@ -9,7 +11,10 @@ export const RuntimeSettingsService = {
     const { logRetentionDays } = RuntimeSettingsModel.get();
     if (logRetentionDays === 0) return 0;
     const cutoff = new Date(Date.now() - logRetentionDays * DAY_MS).toISOString();
-    const deleted = TaskModel.deleteFinishedBefore(cutoff);
+    const deletedTasks = TaskModel.deleteFinishedBefore(cutoff);
+    WorkflowRunModel.deleteFinishedBefore(cutoff);
+    const deletedWorkflowHistory = WorkflowModel.pruneExecutionHistoryBefore(cutoff);
+    const deleted = deletedTasks + deletedWorkflowHistory;
     if (deleted > 0) console.log(`[retention] Deleted ${deleted} completed task log(s) older than ${logRetentionDays} day(s)`);
     return deleted;
   },

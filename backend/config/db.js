@@ -261,6 +261,9 @@ try {
       inventoryName TEXT DEFAULT '',
       playbook TEXT DEFAULT '',
       extraVars TEXT DEFAULT '{}',
+      environmentId TEXT,
+      environmentName TEXT DEFAULT '',
+      environmentVariables TEXT DEFAULT '{}',
       "limit" TEXT DEFAULT 'all',
       hostsStats TEXT DEFAULT '{"ok":0,"changed":0,"unreachable":0,"failed":0,"skipped":0}',
       logs TEXT DEFAULT '[]'
@@ -273,7 +276,7 @@ try {
   process.exit(1);
 }
 
-const taskCols = ['type', 'provider', 'terraformAction', 'winrmPort', 'winrmUseSsl'];
+const taskCols = ['type', 'provider', 'terraformAction', 'winrmPort', 'winrmUseSsl', 'environmentId', 'environmentName', 'environmentVariables'];
 for (const col of taskCols) {
   try { db.exec(`ALTER TABLE tasks ADD COLUMN "${col}" TEXT`); } catch (_) {}
 }
@@ -313,6 +316,25 @@ try {
   `);
 } catch (error) {
   console.error('❌ [DB] Failed to create runtime settings table');
+  console.error(error);
+  process.exit(1);
+}
+
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS workflow_runs (
+      id TEXT PRIMARY KEY,
+      workflowId TEXT NOT NULL,
+      status TEXT NOT NULL,
+      runData TEXT NOT NULL,
+      startedAt TEXT NOT NULL,
+      updatedAt TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_workflow_runs_workflow_started
+      ON workflow_runs (workflowId, startedAt DESC);
+  `);
+} catch (error) {
+  console.error('❌ [DB] Failed to create workflow runs table');
   console.error(error);
   process.exit(1);
 }

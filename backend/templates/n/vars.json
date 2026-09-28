@@ -1,5 +1,0 @@
-{
-  "channels": 4,
-  "backup_type": "full_database",
-  "max_allowed_lag_seconds": 30
-}

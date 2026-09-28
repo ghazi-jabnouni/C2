@@ -53,7 +53,10 @@ export const ApiTokensPage: React.FC = () => {
     { id: 'tasks:run', label: 'Run Tasks' },
     { id: 'tasks:request', label: 'Request Task Runs (approval workflow)' },
     { id: 'tasks:read', label: 'Read Execution Output & Logs' },
-    { id: 'templates:read', label: 'Inspect Templates & Playbooks' }
+    { id: 'templates:read', label: 'Inspect Templates & Playbooks' },
+    { id: 'workflows:read', label: 'Read Workflow Runs' },
+    { id: 'workflows:run', label: 'Start Workflow Runs' },
+    { id: 'workflows:approve', label: 'Approve Workflow Steps' }
   ];
 
   const handleCreate = async (e: React.FormEvent) => {

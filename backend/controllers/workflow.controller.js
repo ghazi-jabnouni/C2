@@ -1,4 +1,5 @@
 import { WorkflowModel } from '../models/workflow.model.js';
+import { WorkflowRunModel } from '../models/workflow-run.model.js';
 import { MailSettingsModel } from '../models/mail-settings.model.js';
 import nodemailer from 'nodemailer';
 
@@ -12,7 +13,7 @@ function createMailTransport(settings) {
   });
 }
 
-async function sendWorkflowEmails(workflow, extraVars, nodeId) {
+export async function sendWorkflowEmails(workflow, extraVars, nodeId) {
   const allEmailNodes = (workflow.nodes || []).filter((node) => node.type === 'email');
   const emailNodes = nodeId ? allEmailNodes.filter((node) => node.id === nodeId) : allEmailNodes;
   if (nodeId && emailNodes.length === 0) throw new Error(`Email node '${nodeId}' was not found in this workflow.`);
@@ -58,7 +59,7 @@ function interpolateWebhookValue(value, variables) {
   return value;
 }
 
-async function sendWorkflowWebhook(workflow, node, triggerVariables = {}) {
+export async function sendWorkflowWebhook(workflow, node, triggerVariables = {}) {
   if (!node.hookUrl?.trim()) throw new Error(`Webhook node '${node.label}' has no URL.`);
   const variables = {
     ...triggerVariables,
@@ -133,24 +134,61 @@ export const WorkflowController = {
       res.json(updated);
     } catch (err) { res.status(500).json({ error: err.message }); }
   },
-  run: (req, res) => {
+  run: async (req, res) => {
     try {
+      if (req.authType === 'api-token' && !req.apiTokenScopes.includes('workflows:run')) {
+        return res.status(403).json({ error: 'API token requires the workflows:run scope.' });
+      }
       const workflow = WorkflowModel.findById(req.params.id);
       if (!workflow) return res.status(404).json({ error: 'Workflow not found' });
-      const extraVars = req.body?.extraVars || {};
-      sendWorkflowEmails(workflow, extraVars).then((emailResults) => {
-        res.status(202).json({
-          message: 'Workflow email steps accepted',
-          workflowId: workflow.id,
-          workflowName: workflow.name,
-          triggeredBy: req.body?.triggeredBy || 'API',
-          extraVars,
-          emailResults,
-          status: 'queued'
-        });
-      }).catch((err) => {
-        res.status(502).json({ error: err.message });
+      let extraVars = req.body?.extraVars || {};
+      if (typeof extraVars === 'string') {
+        try { extraVars = JSON.parse(extraVars); } catch { return res.status(400).json({ error: 'extraVars must be a JSON object.' }); }
+      }
+      if (!extraVars || typeof extraVars !== 'object' || Array.isArray(extraVars)) {
+        return res.status(400).json({ error: 'extraVars must be a JSON object.' });
+      }
+      const { WorkflowRunner } = await import('../services/workflow-runner.js');
+      const run = WorkflowRunner.start(workflow, {
+        extraVars,
+        limit: req.body?.limit || 'all',
+        startNodeId: req.body?.startNodeId,
+        triggeredBy: req.body?.triggeredBy || 'API'
       });
+      res.status(202).json({ message: 'Workflow execution started', run });
+    } catch (err) {
+      res.status(err.statusCode || 500).json({ error: err.message });
+    }
+  },
+  getRun: (req, res) => {
+    try {
+      if (req.authType === 'api-token' && !req.apiTokenScopes.some((scope) => scope === 'workflows:read' || scope === 'workflows:run')) {
+        return res.status(403).json({ error: 'API token requires workflows:read or workflows:run scope.' });
+      }
+      const run = WorkflowRunModel.findById(req.params.runId);
+      if (!run || run.workflowId !== req.params.id) return res.status(404).json({ error: 'Workflow run not found' });
+      res.json(run);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  },
+  approveRun: async (req, res) => {
+    try {
+      if (req.authType === 'api-token' && !req.apiTokenScopes.includes('workflows:approve')) {
+        return res.status(403).json({ error: 'API token requires the workflows:approve scope.' });
+      }
+      const { nodeId, runId } = req.params;
+      const { decision } = req.body || {};
+      if (decision !== 'yes' && decision !== 'no') return res.status(400).json({ error: 'Decision must be yes or no.' });
+      const run = WorkflowRunModel.findById(runId);
+      if (!run || run.workflowId !== req.params.id || run.waitingNodeId !== nodeId) {
+        return res.status(404).json({ error: 'No matching workflow approval is waiting.' });
+      }
+      const { WorkflowRunner } = await import('../services/workflow-runner.js');
+      if (!WorkflowRunner.approve(runId, nodeId, decision)) {
+        return res.status(409).json({ error: 'Workflow approval is no longer active.' });
+      }
+      res.json({ accepted: true, runId, nodeId, decision });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }

@@ -10,6 +10,7 @@ import type {
   PendingRequest,
   ApiToken,
   Workflow,
+  WorkflowRun,
   MailSettings,
   RuntimeSettings,
   User,
@@ -186,6 +187,18 @@ export const api = {
     fetchJson<Workflow>('/workflows', { method: 'POST', body: JSON.stringify(data) }),
   updateWorkflow: (id: string, data: Partial<Workflow>) =>
     fetchJson<Workflow>(`/workflows/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  startWorkflow: (id: string, data: { extraVars?: Record<string, unknown>; limit?: string; startNodeId?: string; triggeredBy?: string }) =>
+    fetchJson<{ message: string; run: WorkflowRun }>(`/workflows/${id}/run`, {
+      method: 'POST',
+      body: JSON.stringify(data)
+    }),
+  getWorkflowRun: (workflowId: string, runId: string) =>
+    fetchJson<WorkflowRun>(`/workflows/${workflowId}/runs/${runId}`),
+  approveWorkflowRun: (workflowId: string, runId: string, nodeId: string, decision: 'yes' | 'no') =>
+    fetchJson<{ accepted: boolean; runId: string; nodeId: string; decision: 'yes' | 'no' }>(
+      `/workflows/${workflowId}/runs/${runId}/approval/${nodeId}`,
+      { method: 'POST', body: JSON.stringify({ decision }) }
+    ),
   getMailSettings: () => fetchJson<MailSettings>('/mail-settings'),
   saveMailSettings: (data: {
     host: string;

@@ -50,3 +50,27 @@ Start both in development (concurrently):
 ```bash
 npm run dev
 ```
+
+## Workflow API execution
+
+Start a saved workflow from the diagram UI or another authenticated client. The backend runs its DAG independently of the browser and returns a run ID immediately:
+
+```http
+POST /api/workflows/:workflowId/run
+Authorization: Bearer <session-token-or-API-token-with-workflows:run-scope>
+Content-Type: application/json
+```
+
+```json
+{
+  "triggeredBy": "deployment-service",
+  "limit": "all",
+  "extraVars": { "environment": "staging" }
+}
+```
+
+The response is `202 Accepted` with a `run` object. Poll `GET /api/workflows/:workflowId/runs/:runId` for persisted status, node states, and logs. Approval steps pause the run until an authenticated client posts `{ "decision": "yes" }` or `{ "decision": "no" }` to `/api/workflows/:workflowId/runs/:runId/approval/:nodeId`.
+
+For live updates, connect to `/ws?workflowId=<workflowId>&token=<session-token>`. The socket sends `INIT_WORKFLOW_RUN` with the latest run, then `WORKFLOW_RUN_UPDATE` snapshots as nodes progress. It can reconnect after the browser disconnects; the backend continues the run.
+
+API tokens can be generated under **API & Webhooks**. Grant `workflows:run` to start runs, `workflows:read` to poll runs/subscribe to live updates, and `workflows:approve` to resolve approval gates. A run token can also subscribe to its own workflow's live updates.

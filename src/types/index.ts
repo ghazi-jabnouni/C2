@@ -105,6 +105,9 @@ export interface TaskExecution {
   inventoryName: string;
   playbook: string;
   extraVars?: string;
+  environmentId?: string | null;
+  environmentName?: string;
+  environmentVariables?: Record<string, unknown>;
   limit?: string;
   hostsStats: {
     ok: number;
@@ -200,6 +203,14 @@ export interface WorkflowExecution {
   triggeredBy: string;
   totalStages: number;
   logs: string[];
+}
+
+export interface WorkflowRun extends Omit<WorkflowExecution, 'status'> {
+  status: 'running' | 'waiting_for_approval' | 'success' | 'failed';
+  totalNodes: number;
+  currentNodeId: string | null;
+  waitingNodeId: string | null;
+  nodeStatuses: Record<string, WorkflowNode['status']>;
 }
 
 export interface MailSettings {

@@ -17,6 +17,66 @@ if (!fs.existsSync(workspacesDir)) {
   try { fs.mkdirSync(workspacesDir, { recursive: true }); } catch (_) {}
 }
 
+function parseObject(value, label) {
+  if (value && typeof value === 'object' && !Array.isArray(value)) return value;
+  if (typeof value === 'string') {
+    const parsed = JSON.parse(value || '{}');
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
+  }
+  if (value == null || value === '') return {};
+  throw new Error(`${label} must be a JSON object.`);
+}
+
+function collectSecretValues(value, values = []) {
+  if (typeof value === 'string') {
+    if (value.length >= 3) values.push(value);
+  } else if (Array.isArray(value)) {
+    value.forEach((item) => collectSecretValues(item, values));
+  } else if (value && typeof value === 'object') {
+    Object.values(value).forEach((item) => collectSecretValues(item, values));
+  }
+  return values;
+}
+
+function toEnvironmentStrings(values) {
+  return Object.fromEntries(Object.entries(values).map(([key, value]) => [
+    key,
+    typeof value === 'string' ? value : JSON.stringify(value)
+  ]));
+}
+
+function writeWorkspaceVariableFiles(taskWorkspace, visibleExtraVars, environmentVariables) {
+  const varsPath = path.join(taskWorkspace, 'vars.json');
+  fs.writeFileSync(varsPath, JSON.stringify(visibleExtraVars, null, 2), { encoding: 'utf8', mode: 0o600 });
+
+  const envLines = Object.entries(toEnvironmentStrings(environmentVariables))
+    .filter(([key]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key))
+    .map(([key, value]) => `${key}=${JSON.stringify(value)}`);
+  fs.writeFileSync(path.join(taskWorkspace, '.env'), `${envLines.join('\n')}${envLines.length ? '\n' : ''}`, {
+    encoding: 'utf8',
+    mode: 0o600
+  });
+  return varsPath;
+}
+
+export function buildAnsibleVariableContext(environment, templateVars, runtimeVars) {
+  const environmentVariables = parseObject(environment?.variables, 'Environment variables');
+  const environmentSecrets = parseObject(environment?.secrets, 'Environment secrets');
+  const visibleExtraVars = {
+    ...environmentVariables,
+    ...parseObject(templateVars, 'Template extra variables'),
+    ...parseObject(runtimeVars, 'Runtime extra variables')
+  };
+  return {
+    environmentVariables,
+    visibleExtraVars,
+    executionExtraVars: { ...visibleExtraVars, ...environmentSecrets },
+    secretExtraVars: environmentSecrets,
+    environmentForExecution: toEnvironmentStrings({ ...environmentVariables, ...environmentSecrets }),
+    redactedValues: collectSecretValues(environmentSecrets)
+  };
+}
+
 export function startTemplateExecution(templateId, options = {}) {
   const tmpl = TemplateModel.findById(templateId);
   if (!tmpl) return null;
@@ -43,11 +103,9 @@ export function startTemplateExecution(templateId, options = {}) {
   }
 
   const limitOverride = options.limit || tmpl.limit || 'all';
-  const extraVars = options.extraVars === undefined
-    ? tmpl.extraVars || '{}'
-    : typeof options.extraVars === 'string'
-      ? options.extraVars
-      : JSON.stringify(options.extraVars || {});
+  const environment = tmpl.environmentId ? EnvironmentModel.findById(tmpl.environmentId) : null;
+  const variableContext = buildAnsibleVariableContext(environment, tmpl.extraVars, options.extraVars);
+  const extraVars = JSON.stringify(variableContext.visibleExtraVars);
   const task = TaskModel.create({
     templateId: tmpl.id,
     templateName: tmpl.name,
@@ -59,7 +117,10 @@ export function startTemplateExecution(templateId, options = {}) {
     triggeredBy: options.triggeredBy || 'Operator',
     inventoryName,
     playbook: tmpl.playbook,
-    extraVars: extraVars || tmpl.extraVars || '{}',
+    extraVars,
+    environmentId: environment?.id || tmpl.environmentId,
+    environmentName: environment?.name || '',
+    environmentVariables: variableContext.environmentVariables,
     limit: limitOverride
   });
 
@@ -68,9 +129,106 @@ export function startTemplateExecution(templateId, options = {}) {
   } else if (tmpl.type === 'powershell') {
     executePowerShellWinRM(task.id, tmpl, inventory, inventoryContent, limitOverride);
   } else {
-    executeAnsiblePlaybook(task.id, tmpl, inventory, inventoryContent, limitOverride);
+    executeAnsiblePlaybook(
+      task.id,
+      tmpl,
+      inventory,
+      inventoryContent,
+      limitOverride,
+      variableContext.executionExtraVars,
+      variableContext.environmentForExecution,
+      variableContext.redactedValues,
+      variableContext.visibleExtraVars,
+      variableContext.environmentVariables,
+      variableContext.secretExtraVars
+    );
   }
   return task;
+}
+
+export function prepareAnsibleCredentialConfig({ credential, connectionType, taskWorkspace, winrmPort, winrmUseSsl }) {
+  const connectionVars = {};
+  const args = [];
+  const environment = {};
+  const temporaryFiles = [];
+
+  if (connectionType === 'local') {
+    connectionVars.ansible_connection = 'local';
+  } else if (connectionType === 'ssh') {
+    connectionVars.ansible_connection = 'ssh';
+  } else if (connectionType === 'winrm') {
+    connectionVars.ansible_connection = 'winrm';
+    connectionVars.ansible_port = Number(winrmPort || 5985);
+    connectionVars.ansible_winrm_scheme = winrmUseSsl === true || winrmUseSsl === '1' ? 'https' : 'http';
+    connectionVars.ansible_winrm_server_cert_validation = 'ignore';
+  }
+
+  if (!credential) return { connectionVars, args, environment, temporaryFiles };
+
+  connectionVars.credential_type = credential.type;
+  connectionVars.credential_name = credential.name;
+  if (credential.username) connectionVars.ansible_user = credential.username;
+  const secretVars = {};
+  if (credential.password) secretVars.ansible_password = credential.password;
+
+  if (credential.domain) {
+    connectionVars.credential_domain = credential.domain;
+    if (credential.username && !credential.username.includes('\\')) {
+      connectionVars.ansible_user = `${credential.domain}\\${credential.username}`;
+    }
+  }
+
+  if (credential.sudoPassword && connectionType !== 'winrm') {
+    connectionVars.ansible_become = true;
+    connectionVars.ansible_become_method = 'sudo';
+    secretVars.ansible_become_password = credential.sudoPassword;
+  }
+
+  if (credential.sshKey && connectionType === 'ssh') {
+    const privateKeyPath = path.join(taskWorkspace, 'ansible-private-key');
+    fs.writeFileSync(privateKeyPath, `${credential.sshKey.trim()}\n`, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+    temporaryFiles.push(privateKeyPath);
+    connectionVars.ansible_ssh_private_key_file = privateKeyPath;
+    args.push('--private-key', privateKeyPath);
+  }
+
+  if (credential.vaultPassword) {
+    const vaultPasswordPath = path.join(taskWorkspace, 'ansible-vault-password');
+    fs.writeFileSync(vaultPasswordPath, credential.vaultPassword, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+    temporaryFiles.push(vaultPasswordPath);
+    args.push('--vault-password-file', vaultPasswordPath);
+  }
+
+  if (credential.secretToken) {
+    secretVars.credential_secret_token = credential.secretToken;
+    secretVars.cloud_api_token = credential.secretToken;
+    environment.ANSIBLE_CREDENTIAL_TOKEN = credential.secretToken;
+    environment.CLOUD_API_TOKEN = credential.secretToken;
+  }
+
+  if (credential.msClientId) {
+    connectionVars.azure_client_id = credential.msClientId;
+    environment.AZURE_CLIENT_ID = credential.msClientId;
+  }
+  if (credential.msClientSecret) {
+    secretVars.azure_client_secret = credential.msClientSecret;
+    environment.AZURE_CLIENT_SECRET = credential.msClientSecret;
+  }
+  if (credential.msTenant) {
+    connectionVars.azure_tenant = credential.msTenant;
+    environment.AZURE_TENANT = credential.msTenant;
+  }
+
+  if (connectionType === 'winrm' && credential.type === 'active_directory') {
+    const transport = String(credential.adAuthMethod || 'ntlm').toLowerCase();
+    if (!['ntlm', 'kerberos', 'credssp'].includes(transport)) {
+      throw new Error(`Active Directory auth method '${transport}' is not a supported WinRM transport. Choose NTLM, Kerberos, or CredSSP.`);
+    }
+    connectionVars.ansible_winrm_transport = transport;
+    connectionVars.credential_ad_auth_method = transport;
+  }
+
+  return { connectionVars, secretVars, args, environment, temporaryFiles };
 }
 
 export const TemplateController = {
@@ -287,19 +445,33 @@ function parseInventoryHosts(inventoryContent, limit) {
   return matchedHosts.length > 0 ? matchedHosts : [cleanedLimit];
 }
 
-async function executeAnsiblePlaybook(taskId, tmpl, inventory, inventoryContent, limitOverride) {
+async function executeAnsiblePlaybook(taskId, tmpl, inventory, inventoryContent, limitOverride, runtimeExtraVars, environmentForExecution = {}, redactedValues = [], workspaceExtraVars = runtimeExtraVars, workspaceEnvironmentVariables = {}, secretExtraVars = {}) {
   const playbook = tmpl.playbook || 'site.yml';
   const effectiveLimit = limitOverride || tmpl.limit || 'all';
   const taskWorkspace = path.join(workspacesDir, taskId);
   fs.mkdirSync(taskWorkspace, { recursive: true });
 
   const pushLog = (msg, level = 'info') => {
-    const line = { ts: new Date().toISOString(), level, msg };
+    const redactedMessage = redactedValues.reduce((text, secret) => text.split(secret).join('[REDACTED]'), String(msg));
+    const line = { ts: new Date().toISOString(), level, msg: redactedMessage };
     try {
       TaskModel.appendLog(taskId, [line]);
-      fs.appendFileSync(path.join(taskWorkspace, 'execution.log'), `[${line.ts}] [${level}] ${msg}\n`, 'utf8');
+      fs.appendFileSync(path.join(taskWorkspace, 'execution.log'), `[${line.ts}] [${level}] ${redactedMessage}\n`, 'utf8');
     } catch (_) {}
   };
+
+  let visibleExtraVars;
+  let visibleEnvironmentVariables;
+  try {
+    visibleExtraVars = parseObject(workspaceExtraVars, 'Extra variables');
+    visibleEnvironmentVariables = parseObject(workspaceEnvironmentVariables, 'Environment variables');
+    writeWorkspaceVariableFiles(taskWorkspace, visibleExtraVars, visibleEnvironmentVariables);
+  } catch (error) {
+    pushLog(`Unable to write task variables: ${error instanceof Error ? error.message : String(error)}`, 'error');
+    TaskModel.updateStatus(taskId, 'failed', '0s', { ok: 0, changed: 0, unreachable: 0, failed: 1, skipped: 0 });
+    TemplateModel.incrementRuns(tmpl.id, 'failed');
+    return;
+  }
 
   pushLog('REAL ANSIBLE RUNNER: starting ansible-playbook execution', 'info');
   let rawGitUrl = tmpl.gitUrl || '';
@@ -371,26 +543,8 @@ async function executeAnsiblePlaybook(taskId, tmpl, inventory, inventoryContent,
   const inventoryPath = path.join(taskWorkspace, 'inventory.ini');
   const varsPath = path.join(taskWorkspace, 'vars.json');
   fs.writeFileSync(inventoryPath, inventoryContent || '[all]\nlocalhost ansible_connection=local\n', 'utf8');
-  let extraVars = {};
-  try { extraVars = typeof tmpl.extraVars === 'string' ? JSON.parse(tmpl.extraVars || '{}') : (tmpl.extraVars || {}); } catch (error) {
-    pushLog(`Invalid extra variables JSON: ${error.message}`, 'error');
-    TaskModel.updateStatus(taskId, 'failed', '0s', { ok: 0, changed: 0, unreachable: 0, failed: 1, skipped: 0 });
-    TemplateModel.incrementRuns(tmpl.id, 'failed');
-    return;
-  }
-
   const connectionType = String(inventory?.connectionType || 'local').toLowerCase();
-  const connectionVars = {};
-  if (connectionType === 'local') {
-    connectionVars.ansible_connection = 'local';
-  } else if (connectionType === 'ssh') {
-    connectionVars.ansible_connection = 'ssh';
-  } else if (connectionType === 'winrm') {
-    connectionVars.ansible_connection = 'winrm';
-    connectionVars.ansible_port = Number(tmpl.winrmPort || 5985);
-    connectionVars.ansible_winrm_scheme = tmpl.winrmUseSsl === true || tmpl.winrmUseSsl === '1' ? 'https' : 'http';
-    connectionVars.ansible_winrm_server_cert_validation = 'ignore';
-  } else {
+  if (!['local', 'ssh', 'winrm'].includes(connectionType)) {
     pushLog(`Unsupported inventory connection type '${connectionType}'.`, 'error');
     TaskModel.updateStatus(taskId, 'failed', '0s', { ok: 0, changed: 0, unreachable: 1, failed: 1, skipped: 0 });
     TemplateModel.incrementRuns(tmpl.id, 'failed');
@@ -398,25 +552,45 @@ async function executeAnsiblePlaybook(taskId, tmpl, inventory, inventoryContent,
   }
 
   const credentialId = inventory?.credentialId || tmpl.credentialId;
-  if (credentialId) {
-    const credential = CredentialModel.findById(credentialId);
-    if (credential) {
-      if (credential.username) connectionVars.ansible_user = credential.username;
-      if (credential.password) connectionVars.ansible_password = credential.password;
-      if (credential.domain && credential.username && !credential.username.includes('\\')) {
-        connectionVars.ansible_user = `${credential.domain}\\${credential.username}`;
-      }
-    }
+  const credential = credentialId ? CredentialModel.findById(credentialId) : null;
+  let credentialConfig;
+  try {
+    credentialConfig = prepareAnsibleCredentialConfig({
+      credential,
+      connectionType,
+      taskWorkspace,
+      winrmPort: tmpl.winrmPort,
+      winrmUseSsl: tmpl.winrmUseSsl
+    });
+  } catch (error) {
+    pushLog(`Credential setup failed: ${error instanceof Error ? error.message : String(error)}`, 'error');
+    TaskModel.updateStatus(taskId, 'failed', '0s', { ok: 0, changed: 0, unreachable: 1, failed: 1, skipped: 0 });
+    TemplateModel.incrementRuns(tmpl.id, 'failed');
+    return;
   }
-  fs.writeFileSync(varsPath, JSON.stringify({ ...extraVars, ...connectionVars }, null, 2), 'utf8');
+  const { connectionVars, secretVars: credentialSecretVars, args: credentialArgs, environment: credentialEnvironment, temporaryFiles } = credentialConfig;
+  const varsContent = JSON.stringify({ ...visibleExtraVars, ...connectionVars }, null, 2);
+  fs.writeFileSync(varsPath, varsContent, { encoding: 'utf8', mode: 0o600 });
+  const combinedSecretVars = { ...secretExtraVars, ...credentialSecretVars };
+  const secretVarsPath = path.join(taskWorkspace, 'ansible-secret-vars.json');
+  if (Object.keys(combinedSecretVars).length > 0) {
+    fs.writeFileSync(secretVarsPath, JSON.stringify(combinedSecretVars, null, 2), { encoding: 'utf8', mode: 0o600 });
+    temporaryFiles.push(secretVarsPath);
+  }
 
   const args = ['-i', inventoryPath, discoveredPlaybook, '--extra-vars', `@${varsPath}`];
+  if (Object.keys(combinedSecretVars).length > 0) args.push('--extra-vars', `@${secretVarsPath}`);
+  args.push(...credentialArgs);
   if (effectiveLimit && effectiveLimit !== 'all' && effectiveLimit !== '*') args.push('--limit', effectiveLimit);
   pushLog(`TASK [Run Ansible Playbook: ${path.basename(discoveredPlaybook)}] ***`);
   pushLog(`$ ansible-playbook -i inventory.ini ${path.basename(discoveredPlaybook)}${effectiveLimit !== 'all' ? ` --limit ${effectiveLimit}` : ''}`);
 
   const startMs = Date.now();
-  const ansible = spawn('ansible-playbook', args, { cwd: taskWorkspace, windowsHide: true });
+  const ansible = spawn('ansible-playbook', args, {
+    cwd: taskWorkspace,
+    windowsHide: true,
+    env: { ...process.env, ...environmentForExecution, ...credentialEnvironment }
+  });
   const logOutput = (chunk, stream) => String(chunk).split(/\r?\n/).filter(Boolean).forEach((line) => {
     const failed = /fatal:|failed=|error/i.test(line);
     pushLog(`[${stream}] ${line}`, failed ? 'error' : stream === 'stdout' ? 'ok' : 'info');
@@ -425,6 +599,9 @@ async function executeAnsiblePlaybook(taskId, tmpl, inventory, inventoryContent,
   ansible.stderr.on('data', (chunk) => logOutput(chunk, 'stderr'));
   ansible.on('error', (error) => pushLog(`[ansible] ${error.message}`, 'error'));
   ansible.on('close', (code) => {
+    for (const privateFile of temporaryFiles) {
+      try { fs.rmSync(privateFile, { force: true }); } catch (_) {}
+    }
     const success = code === 0;
     const durationSec = ((Date.now() - startMs) / 1000).toFixed(1);
     pushLog('ANSIBLE EXECUTION RECAP ***', 'recap');

@@ -1,8 +1,0 @@
-{
-  "backup_type": "full",
-  "compression": "zstd",
-  "verify_checksum": true,
-  "ansible_connection": "local",
-  "ansible_user": "root",
-  "ansible_password": "root"
-}

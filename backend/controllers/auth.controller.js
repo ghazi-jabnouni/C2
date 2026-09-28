@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { UserModel } from '../models/user.model.js';
+import { TokenModel } from '../models/token.model.js';
 
 // Simple in-memory session store (for production use Redis/JWT)
 const sessions = new Map();
@@ -8,7 +9,42 @@ function generateToken() {
   return crypto.randomBytes(32).toString('hex');
 }
 
+function getAuthForToken(token) {
+  const session = token ? sessions.get(token) : null;
+  if (session) {
+    const user = UserModel.findById(session.userId);
+    return user ? { user, type: 'session', scopes: [] } : null;
+  }
+
+  const apiToken = token ? TokenModel.findByFull(token) : null;
+  if (!apiToken) return null;
+  if (apiToken.expiresAt && new Date(apiToken.expiresAt).getTime() < Date.now()) return null;
+  let scopes = [];
+  try { scopes = JSON.parse(apiToken.scopes || '[]'); } catch (_) {}
+  TokenModel.touch(apiToken.id);
+  return {
+    user: { id: `api-${apiToken.id}`, name: apiToken.name || 'API Token', email: '', role: 'Operator', status: 'active' },
+    type: 'api-token',
+    scopes: Array.isArray(scopes) ? scopes : []
+  };
+}
+
+function apiTokenScopesForRequest(req) {
+  const route = `${req.baseUrl || ''}${req.path || ''}`;
+  if (/^\/api\/workflows\/[^/]+\/run$/.test(route) && req.method === 'POST') return ['workflows:run'];
+  if (/^\/api\/workflows\/[^/]+\/runs\/[^/]+\/approval\/[^/]+$/.test(route) && req.method === 'POST') return ['workflows:approve'];
+  if (/^\/api\/workflows\/[^/]+\/runs\/[^/]+$/.test(route) && req.method === 'GET') return ['workflows:read', 'workflows:run'];
+  if (route === '/api/workflows' && req.method === 'GET') return ['workflows:read'];
+  if (/^\/api\/templates(?:\/[^/]+)?$/.test(route) && req.method === 'GET') return ['templates:read'];
+  if (/^\/api\/templates\/[^/]+\/run$/.test(route) && req.method === 'POST') return ['tasks:run', 'tasks:create'];
+  if (/^\/api\/tasks(?:\/[^/]+)?$/.test(route) && req.method === 'GET') return ['tasks:read'];
+  return [];
+}
+
 export const AuthController = {
+  getUserForToken: (token) => getAuthForToken(token)?.user || null,
+  getAuthForToken,
+
   login: (req, res) => {
     try {
       const { email, password } = req.body;
@@ -93,18 +129,21 @@ export const AuthController = {
       return res.status(401).json({ error: 'Authentication required' });
     }
 
-    const session = sessions.get(token);
-    if (!session) {
+    const auth = getAuthForToken(token);
+    if (!auth) {
       return res.status(401).json({ error: 'Invalid or expired token' });
     }
 
-    const user = UserModel.findById(session.userId);
-    if (!user) {
-      sessions.delete(token);
-      return res.status(401).json({ error: 'User not found' });
+    if (auth.type === 'api-token') {
+      const requiredScopes = apiTokenScopesForRequest(req);
+      if (!requiredScopes.length || !requiredScopes.some((scope) => auth.scopes.includes(scope))) {
+        return res.status(403).json({ error: `API token lacks required scope: ${requiredScopes.join(' or ') || 'endpoint access denied'}.` });
+      }
     }
 
-    req.user = user;
+    req.user = auth.user;
+    req.authType = auth.type;
+    req.apiTokenScopes = auth.scopes;
     next();
   }
 };

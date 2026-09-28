@@ -26,7 +26,7 @@ import {
   Maximize2,
   Search
 } from 'lucide-react';
-import type { Workflow, WorkflowNode, WorkflowEdge, TaskTemplate, TaskExecution } from '../types';
+import type { Workflow, WorkflowNode, WorkflowEdge, TaskTemplate, TaskExecution, WorkflowRun } from '../types';
 import { api } from '../services/api';
 
 interface WorkflowDiagramPageProps {
@@ -111,7 +111,13 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
   
   const [templates, setTemplates] = useState<TaskTemplate[]>([]);
   const [selectedWf, setSelectedWf] = useState<Workflow | null>(null);
-  const [isRunning, setIsRunning] = useState(false);
+  const [isRunning, setIsRunning] = useState(() =>
+    Boolean(workflowId && localStorage.getItem(`workflow-run:${workflowId}`))
+  );
+  const [activeWorkflowRunId, setActiveWorkflowRunId] = useState<string | null>(() =>
+    workflowId ? localStorage.getItem(`workflow-run:${workflowId}`) : null
+  );
+  const [activeWorkflowRun, setActiveWorkflowRun] = useState<WorkflowRun | null>(null);
   const [workflowLimit, setWorkflowLimit] = useState('all');
   const [workflowStartNodeId, setWorkflowStartNodeId] = useState('');
   const [workflowTriggerVariablesJson, setWorkflowTriggerVariablesJson] = useState('{}');
@@ -231,30 +237,6 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
         }));
         wf.nodes = cleanNodes;
 
-        // Ensure default execution history for initial demonstration if empty
-        if (!wf.executionHistory || wf.executionHistory.length === 0) {
-          wf.executionHistory = [
-            {
-              id: `wf-exec-demo-1`,
-              workflowId: wf.id,
-              workflowName: wf.name,
-              status: 'success',
-              startedAt: new Date(Date.now() - 3600000).toISOString(),
-              finishedAt: new Date(Date.now() - 3585000).toISOString(),
-              duration: '15s',
-              triggeredBy: 'admin',
-              totalStages: wf.nodes.length || 3,
-              logs: [
-                `[${new Date(Date.now() - 3600000).toLocaleTimeString()}] [WORKFLOW ENGINE] Initializing Multi-Playbook Pipeline: "${wf.name}"`,
-                `[${new Date(Date.now() - 3600000).toLocaleTimeString()}] Directed Sequence: 1. Deploy Infrastructure ➔ 2. Install Packages ➔ 3. Health Check`,
-                `[${new Date(Date.now() - 3595000).toLocaleTimeString()}] >> Executing 1st Step: Deploy Infrastructure`,
-                `[${new Date(Date.now() - 3590000).toLocaleTimeString()}] [OK] 1st Step: Deploy Infrastructure passed successfully.`,
-                `[${new Date(Date.now() - 3587000).toLocaleTimeString()}] >> Executing 2nd Step: Install Packages`,
-                `[${new Date(Date.now() - 3585000).toLocaleTimeString()}] [WORKFLOW SUCCESS] Pipeline completed all connected stages successfully! ✨`
-              ]
-            }
-          ];
-        }
         setSelectedWf(wf);
       }
       setTemplates(tmpls);
@@ -365,6 +347,96 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
   useEffect(() => {
     loadData();
   }, [workflowId]);
+
+  useEffect(() => {
+    const savedRunId = workflowId ? localStorage.getItem(`workflow-run:${workflowId}`) : null;
+    setActiveWorkflowRunId(savedRunId);
+    setActiveWorkflowRun(null);
+    setIsRunning(Boolean(savedRunId));
+  }, [workflowId]);
+
+  useEffect(() => {
+    if (!workflowId) return;
+    let disposed = false;
+    let socket: WebSocket | null = null;
+    let reconnectTimer: number | undefined;
+
+    const applyRun = (run: WorkflowRun) => {
+      if (disposed) return;
+      setActiveWorkflowRun(run);
+      setExecutionLogs(run.logs || []);
+      const terminal = run.status === 'success' || run.status === 'failed';
+      setIsRunning(!terminal);
+      setSelectedWf((current) => {
+        if (!current || current.id !== run.workflowId) return current;
+        const updatedNodes = current.nodes.map((node) => ({
+          ...node,
+          status: run.nodeStatuses[node.id] || node.status
+        }));
+        const alreadyRecorded = (current.executionHistory || []).some((item) => item.id === run.id);
+        const summary = {
+          id: run.id,
+          workflowId: run.workflowId,
+          workflowName: run.workflowName,
+          status: run.status === 'waiting_for_approval' ? 'running' as const : run.status as 'running' | 'success' | 'failed',
+          startedAt: run.startedAt,
+          finishedAt: run.finishedAt,
+          duration: run.duration,
+          triggeredBy: run.triggeredBy,
+          totalStages: run.totalStages,
+          logs: run.logs
+        };
+        return {
+          ...current,
+          nodes: updatedNodes,
+          executionHistory: [summary, ...(current.executionHistory || []).filter((item) => item.id !== run.id)],
+          totalRuns: (current.totalRuns || 0) + (alreadyRecorded ? 0 : 1),
+          lastRunStatus: terminal ? (run.status === 'success' ? 'success' : 'failed') : 'running',
+          lastRunAt: run.finishedAt || run.startedAt
+        };
+      });
+      if (terminal) {
+        localStorage.removeItem(`workflow-run:${workflowId}`);
+        setActiveWorkflowRunId(null);
+      } else {
+        localStorage.setItem(`workflow-run:${workflowId}`, run.id);
+        setActiveWorkflowRunId(run.id);
+      }
+    };
+
+    const connect = () => {
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const token = localStorage.getItem('auth_token') || '';
+      socket = new WebSocket(`${protocol}//${window.location.host}/ws?workflowId=${encodeURIComponent(workflowId)}&token=${encodeURIComponent(token)}`);
+      socket.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data) as { type: string; run?: WorkflowRun };
+          if ((data.type === 'INIT_WORKFLOW_RUN' || data.type === 'WORKFLOW_RUN_UPDATE') && data.run) applyRun(data.run);
+        } catch (error) {
+          console.error('Failed to process workflow run update:', error);
+        }
+      };
+      socket.onclose = () => {
+        if (!disposed) reconnectTimer = window.setTimeout(connect, 1500);
+      };
+      socket.onerror = () => socket?.close();
+    };
+
+    connect();
+    return () => {
+      disposed = true;
+      if (reconnectTimer) window.clearTimeout(reconnectTimer);
+      socket?.close();
+    };
+  }, [workflowId]);
+
+  useEffect(() => {
+    if (!activeWorkflowRun || !selectedWf || selectedWf.id !== activeWorkflowRun.workflowId) return;
+    setSelectedWf((current) => current ? {
+      ...current,
+      nodes: current.nodes.map((node) => ({ ...node, status: activeWorkflowRun.nodeStatuses[node.id] || node.status }))
+    } : current);
+  }, [activeWorkflowRun, selectedWf?.id]);
 
   const handleUpdateApprovalRouting = async (
     nodeId: string,
@@ -848,7 +920,16 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
     setTimeout(processDownstreamQueue, 200);
   };
 
-  const handleApprovalDecision = (nodeId: string, decision: 'yes' | 'no') => {
+  const handleApprovalDecision = async (nodeId: string, decision: 'yes' | 'no') => {
+    if (activeWorkflowRunId && workflowId) {
+      try {
+        await api.approveWorkflowRun(workflowId, activeWorkflowRunId, nodeId, decision);
+      } catch (error) {
+        alert(`Failed to submit workflow approval: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      return;
+    }
+
     // 1. Immediately resume execution engine without any latency or blocking if active in ref
     if (executionStateRef.current && executionStateRef.current.currentApprovalNodeId === nodeId) {
       const resumeFn = executionStateRef.current.resumeWithDecision;
@@ -977,6 +1058,33 @@ export const WorkflowDiagramPage: React.FC<WorkflowDiagramPageProps> = ({ workfl
 
   const handleRunWorkflow = () => {
     if (!selectedWf || isRunning) return;
+    if (selectedWf.nodes.length > 0) {
+      const currentWf = selectedWf;
+      let triggerVariables: Record<string, unknown>;
+      try {
+        triggerVariables = parseWorkflowTriggerVariables(workflowTriggerVariablesJson);
+      } catch (error) {
+        setExecutionLogs([`[${new Date().toLocaleTimeString()}] [ERROR] ${error instanceof Error ? error.message : String(error)}`]);
+        return;
+      }
+      setIsRunning(true);
+      setExecutionLogs([`[${new Date().toLocaleTimeString()}] [WORKFLOW ENGINE] Starting backend execution for "${currentWf.name}"...`]);
+      api.startWorkflow(currentWf.id, {
+        extraVars: triggerVariables,
+        limit: workflowLimit || 'all',
+        startNodeId: workflowStartNodeId || undefined,
+        triggeredBy: 'admin'
+      }).then(({ run }) => {
+        localStorage.setItem(`workflow-run:${currentWf.id}`, run.id);
+        setActiveWorkflowRunId(run.id);
+        setActiveWorkflowRun(run);
+        setExecutionLogs(run.logs || []);
+      }).catch((error) => {
+        setIsRunning(false);
+        setExecutionLogs([`[${new Date().toLocaleTimeString()}] [WORKFLOW START ERROR] ${error instanceof Error ? error.message : String(error)}`]);
+      });
+      return;
+    }
     const currentWf = selectedWf;
     let triggerVariables: Record<string, unknown>;
     try {

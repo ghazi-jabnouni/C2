@@ -468,7 +468,7 @@ export const TemplatesPage: React.FC<TemplatesPageProps> = ({ initialActiveTaskI
   };
 
   const handleDeleteTask = async (taskId: string) => {
-    if (!confirm('Are you sure you want to delete this task record?')) return;
+    if (!confirm('Delete this task history, its workflow references, and associated workspace files?')) return;
     try {
       await api.deleteTask(taskId);
       if (activeTask?.id === taskId) {
@@ -829,7 +829,8 @@ export const TemplatesPage: React.FC<TemplatesPageProps> = ({ initialActiveTaskI
                                 className="btn btn-secondary btn-sm"
                                 style={{ color: 'var(--danger-color)', borderColor: 'var(--danger-color)' }}
                                 onClick={() => handleDeleteTask(t.id)}
-                                title="Delete Task Record"
+                                disabled={t.status === 'running'}
+                                title={t.status === 'running' ? 'Cancel or wait for this task before deleting its workspace' : 'Delete task history, workflow references, and associated workspace files'}
                               >
                                 <Trash2 size={12} />
                               </button>
@@ -848,6 +849,18 @@ export const TemplatesPage: React.FC<TemplatesPageProps> = ({ initialActiveTaskI
                                     <button className="btn btn-secondary btn-sm" onClick={() => setActiveTask(null)}>
                                       <X size={13} /> Close
                                     </button>
+                                  </div>
+                                  <div style={{ padding: '12px 14px', display: 'grid', gridTemplateColumns: 'minmax(150px, 0.7fr) minmax(220px, 1.3fr)', gap: 14, borderBottom: '1px solid var(--border-color)' }}>
+                                    <div>
+                                      <span style={{ display: 'block', color: 'var(--text-muted)', fontSize: '0.7rem', textTransform: 'uppercase', marginBottom: 5 }}>Environment</span>
+                                      <strong style={{ color: 'var(--text-primary)', fontSize: '0.82rem' }}>{activeTask.environmentName || 'No environment attached'}</strong>
+                                    </div>
+                                    <div>
+                                      <span style={{ display: 'block', color: 'var(--text-muted)', fontSize: '0.7rem', textTransform: 'uppercase', marginBottom: 5 }}>Environment variables</span>
+                                      <pre style={{ margin: 0, color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)', fontSize: '0.74rem', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
+                                        {JSON.stringify(activeTask.environmentVariables || {}, null, 2)}
+                                      </pre>
+                                    </div>
                                   </div>
                                   <TerminalLogViewer
                                     task={activeTask}

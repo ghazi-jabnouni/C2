@@ -94,7 +94,7 @@ export const MailSettingsPage: React.FC = () => {
       setRuntimeSettings(saved);
       setNotice({
         kind: 'success',
-        text: `Runtime settings saved.${saved.deletedLogs ? ` Removed ${saved.deletedLogs} expired task log(s).` : ''}`
+        text: `Runtime settings saved.${saved.deletedLogs ? ` Removed ${saved.deletedLogs} expired task or workflow run log(s).` : ''}`
       });
     } catch (error) {
       setNotice({ kind: 'error', text: error instanceof Error ? error.message : String(error) });
@@ -199,7 +199,7 @@ export const MailSettingsPage: React.FC = () => {
             </span>
           </label>
           <label className="form-label">
-            Completed task log retention (days)
+              Completed task and workflow log retention (days)
             <input
               className="form-control"
               required
@@ -211,7 +211,7 @@ export const MailSettingsPage: React.FC = () => {
               onChange={(event) => setRuntimeSettings((current) => ({ ...current, logRetentionDays: Number(event.target.value) }))}
             />
             <span style={{ display: 'block', marginTop: 5, color: 'var(--text-muted)', fontSize: '0.73rem', fontWeight: 400 }}>
-              Enter 0 to keep history indefinitely. Saving a retention period prunes expired records now and daily thereafter.
+              Enter 0 to keep history indefinitely. Saving a retention period prunes expired completed runs now and daily thereafter.
             </span>
           </label>
         </div>
