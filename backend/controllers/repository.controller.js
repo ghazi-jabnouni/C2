@@ -1,4 +1,9 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { CredentialModel } from '../models/credential.model.js';
 import { RepositoryModel } from '../models/repository.model.js';
+import { retrieveRepositorySource } from '../services/repository-source.js';
 
 export const RepositoryController = {
   getRepositories: (req, res) => {
@@ -23,11 +28,30 @@ export const RepositoryController = {
 
   createRepository: (req, res) => {
     try {
-      const { name, gitUrl, branch, credentialId, playbooks } = req.body;
-      console.log('[repo:create] Incoming payload:', { name, gitUrl, branch, credentialId, playbooks });
+      const { name, sourceType = 'git', gitUrl, branch, credentialId, playbooks } = req.body;
+      console.log('[repo:create] Incoming payload:', { name, sourceType, gitUrl, branch, credentialId, playbooks });
       if (!name || !gitUrl) return res.status(400).json({ error: 'Name and gitUrl are required' });
+      if (!['git', 'http'].includes(sourceType)) return res.status(400).json({ error: 'sourceType must be git or http' });
+      if (sourceType === 'http') {
+        let url;
+        try {
+          url = new URL(gitUrl);
+        } catch (_) {
+          return res.status(400).json({ error: 'HTTP file URL is invalid' });
+        }
+        if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) {
+          return res.status(400).json({ error: 'HTTP file sources must be public HTTP or HTTPS URLs without embedded credentials' });
+        }
+      }
 
-      const newRepo = RepositoryModel.create({ name, gitUrl, branch, credentialId, playbooks });
+      const newRepo = RepositoryModel.create({
+        name,
+        sourceType,
+        gitUrl,
+        branch,
+        credentialId: sourceType === 'git' ? credentialId : null,
+        playbooks
+      });
       console.log('[repo:create] Created:', newRepo && newRepo.id ? newRepo.id : newRepo);
       // Return created repo
       res.status(201).json(newRepo);
@@ -59,40 +83,42 @@ export const RepositoryController = {
   }
 };
 
-// Sync handler: verifies repository URL reachability and updates status/lastSync
-RepositoryController.syncRepository = (req, res) => {
+// Sync verifies access by cloning the configured branch with the assigned Git credential.
+RepositoryController.syncRepository = async (req, res) => {
+  let syncDirectory;
   try {
     const repo = RepositoryModel.findById(req.params.id);
     if (!repo) return res.status(404).json({ error: 'Repository not found' });
 
-    const gitUrl = repo.gitUrl || '';
+    syncDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'automaton-repository-sync-'));
+    const sourceType = repo.sourceType || 'git';
+    const credential = sourceType === 'git' && repo.credentialId ? CredentialModel.findById(repo.credentialId) : null;
+    if (sourceType === 'git' && repo.credentialId && !credential) throw new Error('The credential assigned to this repository was not found.');
 
-    (async () => {
-      let ok = false;
-      try {
-        console.log(`[repo:sync] Checking URL: ${gitUrl}`);
-        if (gitUrl.startsWith('http')) {
-          const resp = await fetch(gitUrl, { method: 'HEAD' });
-          console.log(`[repo:sync] HTTP HEAD status: ${resp.status}`);
-          ok = resp.ok;
-        } else {
-          // Non-HTTP URLs (ssh/git) - mark as not reachable by HTTP check
-          console.log('[repo:sync] Non-HTTP URL, skipping HEAD check');
-          ok = false;
-        }
-      } catch (err) {
-        console.error('[repo:sync] Error checking URL:', err && err.message ? err.message : err);
-        ok = false;
-      }
+    await retrieveRepositorySource({
+      sourceType,
+      url: repo.gitUrl,
+      branch: repo.branch || 'main',
+      destination: path.join(syncDirectory, 'repository'),
+      credential,
+      onOutput: () => {}
+    });
 
-      const status = ok ? 'synced' : 'not-synced';
-      const lastSync = new Date().toISOString();
-
-      const updated = RepositoryModel.update(req.params.id, { status, lastSync });
-
-      res.json({ message: ok ? 'Repository reachable' : 'Repository not reachable', repo: updated });
-    })();
+    const updated = RepositoryModel.update(req.params.id, {
+      status: 'synced',
+      lastSync: new Date().toISOString()
+    });
+    const message = sourceType === 'http'
+      ? 'HTTP file is available and was downloaded successfully.'
+      : `Repository cloned successfully from branch '${repo.branch || 'main'}'.`;
+    res.json({ message, repo: updated });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    const updated = RepositoryModel.update(req.params.id, {
+      status: 'error',
+      lastSync: new Date().toISOString()
+    });
+    res.json({ message: `Repository sync failed: ${err.message}`, repo: updated });
+  } finally {
+    if (syncDirectory) fs.rmSync(syncDirectory, { recursive: true, force: true });
   }
 };

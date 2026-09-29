@@ -24,6 +24,7 @@ export const RepositoriesPage: React.FC = () => {
 
   // Form states
   const [name, setName] = useState('');
+  const [sourceType, setSourceType] = useState<'git' | 'http'>('git');
   const [gitUrl, setGitUrl] = useState('');
   const [branch, setBranch] = useState('main');
   const [credentialId, setCredentialId] = useState('');
@@ -55,10 +56,12 @@ export const RepositoriesPage: React.FC = () => {
   const handleSync = async (id: string) => {
     try {
       setSyncingId(id);
-      await api.syncRepository(id);
+      const result = await api.syncRepository(id);
       // Refresh full list to ensure UI matches DB state (avoids accidental disappearance)
       await loadData();
+      if (result.repo.status !== 'synced') alert(result.message);
     } catch (err) {
+      await loadData();
       alert(`Sync failed: ${err}`);
     } finally {
       setSyncingId(null);
@@ -70,9 +73,10 @@ export const RepositoriesPage: React.FC = () => {
     try {
       const created = await api.createRepository({
         name,
+        sourceType,
         gitUrl,
-        branch,
-        credentialId: credentialId || null,
+        branch: sourceType === 'git' ? branch : 'main',
+        credentialId: sourceType === 'git' ? credentialId || null : null,
         playbooks: [
           'playbooks/site.yml',
           'playbooks/deploy.yml',
@@ -82,9 +86,17 @@ export const RepositoriesPage: React.FC = () => {
       setRepositories((prev) => [...prev, created]);
       setShowAddModal(false);
       setName('');
+      setSourceType('git');
       setGitUrl('');
       setBranch('main');
       setCredentialId('');
+      try {
+        const syncResult = await api.syncRepository(created.id);
+        setRepositories((prev) => prev.map((repo) => repo.id === created.id ? syncResult.repo : repo));
+        if (syncResult.repo.status !== 'synced') alert(syncResult.message);
+      } catch (err) {
+        alert(`Repository created, but sync failed: ${err}`);
+      }
     } catch (err) {
       alert(`Error creating repository: ${err}`);
     }
@@ -117,10 +129,10 @@ export const RepositoriesPage: React.FC = () => {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 16 }}>
         <div>
           <h2 style={{ fontSize: '1.45rem', fontWeight: 800, color: 'var(--text-primary)' }}>
-            Git Repositories
+            Repositories & HTTP Files
           </h2>
           <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
-            Manage Git repositories from GitHub, GitLab, or Bitbucket for automated Ansible playbook execution.
+            Connect a Git repository or a file served over HTTP for task execution.
           </p>
         </div>
 
@@ -197,7 +209,7 @@ export const RepositoriesPage: React.FC = () => {
                 }}
               >
                 <th style={{ padding: '14px 20px' }}>Repository Alias & Branch</th>
-                <th style={{ padding: '14px 20px' }}>Git Remote URL</th>
+                <th style={{ padding: '14px 20px' }}>Source URL</th>
                 <th style={{ padding: '14px 20px' }}>Status & Last Sync</th>
                 <th style={{ padding: '14px 20px', textAlign: 'right' }}>Actions</th>
               </tr>
@@ -245,13 +257,13 @@ export const RepositoriesPage: React.FC = () => {
                             </div>
                             <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: 2 }}>
                               <GitBranch size={12} />
-                              <strong>{repo.branch}</strong>
+                              <strong>{repo.sourceType === 'http' ? 'HTTP FILE' : repo.branch}</strong>
                             </div>
                           </div>
                         </div>
                       </td>
 
-                      {/* Git URL */}
+                      {/* Source URL */}
                       <td style={{ padding: '14px 20px' }}>
                         <div
                           style={{
@@ -275,7 +287,7 @@ export const RepositoriesPage: React.FC = () => {
                           <button
                             onClick={() => handleCopyUrl(repo.gitUrl, repo.id)}
                             style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', flexShrink: 0 }}
-                            title="Copy Git URL"
+                            title="Copy source URL"
                           >
                             {copiedUrlId === repo.id ? <Check size={13} color="#10b981" /> : <Copy size={13} />}
                           </button>
@@ -314,7 +326,7 @@ export const RepositoriesPage: React.FC = () => {
                             className="btn btn-secondary btn-sm"
                             onClick={() => handleSync(repo.id)}
                             disabled={isSyncing}
-                            title="Pull and sync repository"
+                            title="Check and sync source"
                           >
                             <RefreshCw size={13} className={isSyncing ? 'spin-slow' : ''} />
                             <span>{isSyncing ? 'Syncing...' : 'Sync'}</span>
@@ -349,7 +361,7 @@ export const RepositoriesPage: React.FC = () => {
                 <div style={{ padding: 8, borderRadius: 8, backgroundColor: 'rgba(59, 130, 246, 0.12)', color: '#3b82f6' }}>
                   <FolderGit2 size={20} />
                 </div>
-                <h3 style={{ fontSize: '1.2rem', fontWeight: 800 }}>Connect Git Repository</h3>
+                <h3 style={{ fontSize: '1.2rem', fontWeight: 800 }}>Connect Repository Source</h3>
               </div>
               <button
                 onClick={() => setShowAddModal(false)}
@@ -373,18 +385,34 @@ export const RepositoriesPage: React.FC = () => {
               </div>
 
               <div>
-                <label className="form-label">Git Remote URL *</label>
+                <label className="form-label">Source Type</label>
+                <select
+                  value={sourceType}
+                  onChange={(e) => {
+                    const nextType = e.target.value as 'git' | 'http';
+                    setSourceType(nextType);
+                    if (nextType === 'http') setCredentialId('');
+                  }}
+                  className="form-control"
+                >
+                  <option value="git">Git repository</option>
+                  <option value="http">HTTP file (wget)</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="form-label">{sourceType === 'http' ? 'HTTP File URL *' : 'Git Remote URL *'}</label>
                 <input
                   type="text"
                   required
-                  placeholder="https://github.com/org/repo.git or git@github.com:org/repo.git"
+                  placeholder={sourceType === 'http' ? 'http://server/files/example.sh' : 'https://github.com/org/repo.git or git@github.com:org/repo.git'}
                   value={gitUrl}
                   onChange={(e) => setGitUrl(e.target.value)}
                   className="form-control"
                 />
               </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+              {sourceType === 'git' && <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
                 <div>
                   <label className="form-label">Default Branch</label>
                   <input
@@ -403,14 +431,14 @@ export const RepositoriesPage: React.FC = () => {
                     className="form-control"
                   >
                     <option value="">-- Public / None --</option>
-                    {credentials.map((c) => (
+                    {credentials.filter((c) => c.type === 'git_token' || c.type === 'git_password').map((c) => (
                       <option key={c.id} value={c.id}>
-                        {c.name}
+                        {c.name} ({c.type === 'git_token' ? 'Git Login + Token' : 'Git Login + Password'})
                       </option>
                     ))}
                   </select>
                 </div>
-              </div>
+              </div>}
 
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 12 }}>
                 <button type="button" className="btn btn-secondary" onClick={() => setShowAddModal(false)}>

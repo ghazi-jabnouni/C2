@@ -29,8 +29,10 @@ const getCredentialSecretValue = (credential: Credential) => {
     case 'vault_password':
       return credential.vaultPassword || '';
     case 'password':
+    case 'git_password':
       return credential.password || '';
     case 'token':
+    case 'git_token':
     case 'cloud_token':
       return credential.secretToken || credential.password || '';
     case 'active_directory':
@@ -54,7 +56,7 @@ export const CredentialsPage: React.FC = () => {
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
   const [name, setName] = useState('');
-  const [type, setType] = useState<'ssh_key' | 'vault_password' | 'cloud_token' | 'password' | 'microsoft' | 'token' | 'active_directory'>('ssh_key');
+  const [type, setType] = useState<'ssh_key' | 'vault_password' | 'cloud_token' | 'password' | 'microsoft' | 'token' | 'git_token' | 'git_password' | 'active_directory'>('ssh_key');
   const [username, setUsername] = useState('ubuntu');
   const [sshKey, setSshKey] = useState('');
   const [vaultPassword, setVaultPassword] = useState('');
@@ -303,7 +305,7 @@ export const CredentialsPage: React.FC = () => {
                             justifyContent: 'center',
                             color: '#3b82f6'
                           }}>
-                            {cred.type === 'ssh_key' ? <Key size={18} /> : cred.type === 'vault_password' ? <Lock size={18} /> : cred.type === 'microsoft' ? <Key size={18} /> : cred.type === 'token' || cred.type === 'cloud_token' ? <Cloud size={18} /> : <UserRound size={18} />}
+                            {cred.type === 'ssh_key' ? <Key size={18} /> : cred.type === 'vault_password' ? <Lock size={18} /> : cred.type === 'microsoft' ? <Key size={18} /> : cred.type === 'token' || cred.type === 'git_token' || cred.type === 'cloud_token' ? <Cloud size={18} /> : <UserRound size={18} />}
                           </div>
                           <div>
                             <div style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{cred.name}</div>
@@ -446,14 +448,16 @@ export const CredentialsPage: React.FC = () => {
                     <option value="cloud_token">Cloud IAM API Token</option>
                     <option value="password">Login Password</option>
                     <option value="token">Secret Token</option>
+                    <option value="git_token">Git Login + Token</option>
+                    <option value="git_password">Git Login + Password</option>
                     <option value="active_directory">🪟 Active Directory (AD Domain User)</option>
                     <option value="microsoft">Microsoft OAuth/App Registration</option>
                   </select>
                 </div>
 
                 <div>
-                  <label className="form-label">Remote Username / AD Account</label>
-                  <input type="text" value={username} onChange={(e) => setUsername(e.target.value)} className="form-control" placeholder="administrator / svc_ansible" />
+                  <label className="form-label">{type === 'git_token' || type === 'git_password' ? 'Git Login / Username' : 'Remote Username / AD Account'}</label>
+                  <input type="text" required={type === 'git_token' || type === 'git_password'} value={username} onChange={(e) => setUsername(e.target.value)} className="form-control" placeholder={type === 'git_token' || type === 'git_password' ? 'Git provider username' : 'administrator / svc_ansible'} />
                 </div>
               </div>
 
@@ -495,17 +499,17 @@ export const CredentialsPage: React.FC = () => {
                 </div>
               )}
 
-              {type === 'password' && (
+              {(type === 'password' || type === 'git_password') && (
                 <div>
-                  <label className="form-label">Login Password</label>
-                  <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="form-control" placeholder="Enter login password" />
+                  <label className="form-label">{type === 'git_password' ? 'Git Password' : 'Login Password'}</label>
+                  <input type="password" required={type === 'git_password'} value={password} onChange={(e) => setPassword(e.target.value)} className="form-control" placeholder={type === 'git_password' ? 'Enter Git account password' : 'Enter login password'} />
                 </div>
               )}
 
-              {type === 'token' && (
+              {(type === 'token' || type === 'git_token') && (
                 <div>
-                  <label className="form-label">Secret Token</label>
-                  <input type="text" value={secretToken} onChange={(e) => setSecretToken(e.target.value)} className="form-control" placeholder="Enter API token or secret" />
+                  <label className="form-label">{type === 'git_token' ? 'Git Personal Access Token' : 'Secret Token'}</label>
+                  <input type={type === 'git_token' ? 'password' : 'text'} required={type === 'git_token'} value={secretToken} onChange={(e) => setSecretToken(e.target.value)} className="form-control" placeholder={type === 'git_token' ? 'Paste a repository access token' : 'Enter API token or secret'} />
                 </div>
               )}
 
@@ -568,14 +572,16 @@ export const CredentialsPage: React.FC = () => {
                     <option value="cloud_token">Cloud IAM API Token</option>
                     <option value="password">Login Password</option>
                     <option value="token">Secret Token</option>
+                    <option value="git_token">Git Login + Token</option>
+                    <option value="git_password">Git Login + Password</option>
                     <option value="active_directory">🪟 Active Directory (AD Domain User)</option>
                     <option value="microsoft">Microsoft OAuth/App Registration</option>
                   </select>
                 </div>
 
                 <div>
-                  <label className="form-label">Remote Username / AD Account</label>
-                  <input type="text" value={username} onChange={(e) => setUsername(e.target.value)} className="form-control" placeholder="administrator / svc_ansible" />
+                  <label className="form-label">{type === 'git_token' || type === 'git_password' ? 'Git Login / Username' : 'Remote Username / AD Account'}</label>
+                  <input type="text" required={type === 'git_token' || type === 'git_password'} value={username} onChange={(e) => setUsername(e.target.value)} className="form-control" placeholder={type === 'git_token' || type === 'git_password' ? 'Git provider username' : 'administrator / svc_ansible'} />
                 </div>
               </div>
 
@@ -617,17 +623,17 @@ export const CredentialsPage: React.FC = () => {
                 </div>
               )}
 
-              {type === 'password' && (
+              {(type === 'password' || type === 'git_password') && (
                 <div>
-                  <label className="form-label">Login Password</label>
-                  <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="form-control" placeholder="Enter login password" />
+                  <label className="form-label">{type === 'git_password' ? 'Git Password' : 'Login Password'}</label>
+                  <input type="password" required={type === 'git_password'} value={password} onChange={(e) => setPassword(e.target.value)} className="form-control" placeholder={type === 'git_password' ? 'Enter Git account password' : 'Enter login password'} />
                 </div>
               )}
 
-              {type === 'token' && (
+              {(type === 'token' || type === 'git_token') && (
                 <div>
-                  <label className="form-label">Secret Token</label>
-                  <input type="text" value={secretToken} onChange={(e) => setSecretToken(e.target.value)} className="form-control" placeholder="Enter API token or secret" />
+                  <label className="form-label">{type === 'git_token' ? 'Git Personal Access Token' : 'Secret Token'}</label>
+                  <input type={type === 'git_token' ? 'password' : 'text'} required={type === 'git_token'} value={secretToken} onChange={(e) => setSecretToken(e.target.value)} className="form-control" placeholder={type === 'git_token' ? 'Paste a repository access token' : 'Enter API token or secret'} />
                 </div>
               )}
 

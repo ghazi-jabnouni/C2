@@ -14,11 +14,7 @@ export const CredentialController = {
   create: (req, res) => {
     try {
       const data = req.body || {};
-      console.log('[cred:create] Incoming payload:', JSON.stringify(data));
-      console.log('[cred:create] Headers:', {
-        authorization: req.headers.authorization,
-        host: req.headers.host
-      });
+      console.log('[cred:create] Creating credential:', { name: data.name, type: data.type });
       const created = CredentialModel.create(data);
       res.json(created);
     } catch (err) {

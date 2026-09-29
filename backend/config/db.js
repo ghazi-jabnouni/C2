@@ -84,6 +84,7 @@ try {
     CREATE TABLE IF NOT EXISTS repositories (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
+      sourceType TEXT NOT NULL DEFAULT 'git',
       gitUrl TEXT NOT NULL,
       branch TEXT NOT NULL DEFAULT 'main',
       credentialId TEXT,
@@ -100,6 +101,8 @@ try {
   console.error(error);
   process.exit(1);
 }
+
+try { db.exec("ALTER TABLE repositories ADD COLUMN sourceType TEXT NOT NULL DEFAULT 'git'"); } catch (_) {}
 
 // Create tokens table for API/Webhook tokens
 try {

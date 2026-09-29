@@ -9,12 +9,18 @@ import { RepositoryModel } from '../models/repository.model.js';
 import { EnvironmentModel } from '../models/environment.model.js';
 import { CredentialModel } from '../models/credential.model.js';
 import { RuntimeSettingsModel } from '../models/runtime-settings.model.js';
+import { sanitizeGitUrl } from '../services/git-auth.js';
+import { retrieveRepositorySource } from '../services/repository-source.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const workspacesDir = path.resolve(__dirname, '../workspaces');
 if (!fs.existsSync(workspacesDir)) {
   try { fs.mkdirSync(workspacesDir, { recursive: true }); } catch (_) {}
+}
+
+function getRepositoryCredential(repository) {
+  return repository?.credentialId ? CredentialModel.findById(repository.credentialId) : null;
 }
 
 function parseObject(value, label) {
@@ -477,12 +483,16 @@ async function executeAnsiblePlaybook(taskId, tmpl, inventory, inventoryContent,
   let rawGitUrl = tmpl.gitUrl || '';
   let branch = tmpl.branch || 'main';
   let repoName = tmpl.repositoryName || 'Ansible Git Repository';
+  let repositorySourceType = 'git';
+  let repositoryCredential = null;
   if (tmpl.repositoryId) {
     const repo = RepositoryModel.findById(tmpl.repositoryId);
     if (repo) {
       rawGitUrl = repo.gitUrl || rawGitUrl;
       branch = repo.branch || branch;
       repoName = repo.name || repoName;
+      repositorySourceType = repo.sourceType || 'git';
+      repositoryCredential = getRepositoryCredential(repo);
     }
   }
 
@@ -496,7 +506,7 @@ async function executeAnsiblePlaybook(taskId, tmpl, inventory, inventoryContent,
     return;
   }
 
-  pushLog('TASK [Retrieve Ansible Playbook from Git Repository] ***');
+  pushLog(`TASK [Retrieve Ansible Playbook from ${repositorySourceType === 'http' ? 'HTTP' : 'Git'} Source] ***`);
   pushLog(`[Repository] ${repoName} (${targetBranch})`);
   const repositoryWorkspace = path.join(taskWorkspace, 'repository');
   try {
@@ -509,18 +519,18 @@ async function executeAnsiblePlaybook(taskId, tmpl, inventory, inventoryContent,
     return;
   }
   fs.rmSync(repositoryWorkspace, { recursive: true, force: true });
-  const clone = spawn('git', ['clone', '--depth', '1', '-b', targetBranch, gitUrl, repositoryWorkspace], { windowsHide: true });
-  clone.stdout.on('data', (chunk) => String(chunk).split(/\r?\n/).filter(Boolean).forEach((line) => pushLog(`[git] ${line}`, 'ok')));
-  clone.stderr.on('data', (chunk) => String(chunk).split(/\r?\n/).filter(Boolean).forEach((line) => pushLog(`[git] ${line}`, 'info')));
-  const cloneCode = await new Promise((resolve) => {
-    clone.on('error', (error) => {
-      pushLog(`[git] ${error.message}`, 'error');
-      resolve(1);
+  try {
+    await retrieveRepositorySource({
+      sourceType: repositorySourceType,
+      url: gitUrl,
+      branch: targetBranch,
+      destination: repositoryWorkspace,
+      credential: repositoryCredential,
+      fileName: playbook,
+      onOutput: (line, stream) => pushLog(`[${repositorySourceType === 'http' ? 'wget' : 'git'}] ${line}`, stream === 'stdout' ? 'ok' : 'info')
     });
-    clone.on('close', resolve);
-  });
-  if (cloneCode !== 0) {
-    pushLog('Repository checkout failed; Ansible execution was not started.', 'error');
+  } catch (error) {
+    pushLog(`Repository source retrieval failed: ${error.message}`, 'error');
     TaskModel.updateStatus(taskId, 'failed', '0s', { ok: 0, changed: 0, unreachable: 0, failed: 1, skipped: 0 });
     TemplateModel.incrementRuns(tmpl.id, 'failed');
     return;
@@ -915,6 +925,8 @@ async function simulateTerraformExecution(taskId, tmpl, limitOverride) {
   let rawGitUrl = tmpl.gitUrl || '';
   let repoName = tmpl.repositoryName || 'Terraform Git Repository';
   let branch = tmpl.branch || 'main';
+  let repositorySourceType = 'git';
+  let repositoryCredential = null;
 
   if (tmpl.repositoryId) {
     try {
@@ -923,15 +935,19 @@ async function simulateTerraformExecution(taskId, tmpl, limitOverride) {
         repoName = repo.name || repoName;
         rawGitUrl = repo.gitUrl || rawGitUrl;
         branch = repo.branch || branch;
+        repositorySourceType = repo.sourceType || 'git';
+        repositoryCredential = getRepositoryCredential(repo);
       }
     } catch (_) {}
   }
 
   const { cleanGitUrl, subPath } = parseGitUrl(rawGitUrl);
   const targetGitUrl = cleanGitUrl || rawGitUrl;
+  const safeGitUrl = sanitizeGitUrl(targetGitUrl);
   const targetBranch = branch;
 
   const initialLogLines = [];
+  let sourceRetrievalFailed = false;
 
   await new Promise((resolve) => {
     if (!targetGitUrl) {
@@ -949,18 +965,19 @@ async function simulateTerraformExecution(taskId, tmpl, limitOverride) {
       return resolve();
     }
 
-    initialLogLines.push({ ts: new Date().toISOString(), level: 'info', msg: 'TASK [Retrieve Terraform Configuration from Git Repository] ***' });
+    initialLogLines.push({ ts: new Date().toISOString(), level: 'info', msg: `TASK [Retrieve Terraform Configuration from ${repositorySourceType === 'http' ? 'HTTP' : 'Git'} Source] ***` });
     initialLogLines.push({ ts: new Date().toISOString(), level: 'info', msg: `[Terminal] Task workspace: ${taskWorkspace}` });
 
-    const gitCmd = `git clone --depth 1 -b ${JSON.stringify(targetBranch)} ${JSON.stringify(targetGitUrl)} ${JSON.stringify(taskWorkspace)}`;
-    initialLogLines.push({ ts: new Date().toISOString(), level: 'info', msg: `$ ${gitCmd}` });
-
-    exec(gitCmd, { cwd: workspacesDir }, (error, stdout, stderr) => {
+    const handleSourceRetrieved = (error, stdout = '') => {
       if (error) {
-        initialLogLines.push({ ts: new Date().toISOString(), level: 'error', msg: `Git Clone Warning/Fallback: ${error.message}` });
+        sourceRetrievalFailed = true;
+        const safeMessage = error.message
+          .replace(repositoryCredential?.secretToken || '\0', '[REDACTED]')
+          .replace(repositoryCredential?.password || '\0', '[REDACTED]');
+        initialLogLines.push({ ts: new Date().toISOString(), level: 'error', msg: `Repository source retrieval failed: ${safeMessage}` });
       } else {
         if (stdout) initialLogLines.push({ ts: new Date().toISOString(), level: 'ok', msg: stdout.trim() });
-        initialLogLines.push({ ts: new Date().toISOString(), level: 'ok', msg: `ok: [localhost] => Git repository cloned successfully.` });
+        initialLogLines.push({ ts: new Date().toISOString(), level: 'ok', msg: `ok: [localhost] => ${repositorySourceType === 'http' ? 'HTTP file downloaded' : 'Git repository cloned'} successfully.` });
       }
 
       try {
@@ -996,7 +1013,7 @@ async function simulateTerraformExecution(taskId, tmpl, limitOverride) {
           templateName: tmpl.name,
           type: 'terraform',
           mainFile: mainTfFile,
-          gitUrl: targetGitUrl,
+          gitUrl: safeGitUrl,
           branch: targetBranch,
           limit: effectiveLimit,
           environment: envObj,
@@ -1012,15 +1029,37 @@ async function simulateTerraformExecution(taskId, tmpl, limitOverride) {
       initialLogLines.push({ ts: new Date().toISOString(), level: 'info', msg: '--- TERRAFORM GIT CONFIGURATION ---' });
       initialLogLines.push({ ts: new Date().toISOString(), level: 'info', msg: `Workspace   : ${taskWorkspace}` });
       initialLogLines.push({ ts: new Date().toISOString(), level: 'info', msg: `Repository  : ${repoName}` });
-      initialLogLines.push({ ts: new Date().toISOString(), level: 'info', msg: `Git URL     : ${targetGitUrl}` });
+      initialLogLines.push({ ts: new Date().toISOString(), level: 'info', msg: `Git URL     : ${safeGitUrl}` });
       initialLogLines.push({ ts: new Date().toISOString(), level: 'info', msg: `Branch      : ${targetBranch}` });
       initialLogLines.push({ ts: new Date().toISOString(), level: 'info', msg: `Main TF File: ${mainTfFile}` });
       initialLogLines.push({ ts: new Date().toISOString(), level: 'info', msg: '------------------------------------' });
       initialLogLines.push({ ts: new Date().toISOString(), level: 'info', msg: '' });
 
       resolve();
-    });
+    };
+
+    void retrieveRepositorySource({
+      sourceType: repositorySourceType,
+      url: targetGitUrl,
+      branch: targetBranch,
+      destination: taskWorkspace,
+      credential: repositoryCredential,
+      fileName: mainTfFile,
+      onOutput: (line, stream) => initialLogLines.push({
+        ts: new Date().toISOString(),
+        level: stream === 'stderr' ? 'info' : 'ok',
+        msg: line
+      })
+    }).then(() => handleSourceRetrieved(null), (error) => handleSourceRetrieved(error));
   });
+
+  if (sourceRetrievalFailed) {
+    initialLogLines.forEach((line) => { line.ts = new Date().toISOString(); });
+    TaskModel.appendLog(taskId, initialLogLines);
+    TaskModel.updateStatus(taskId, 'failed', '0s', { ok: 0, changed: 0, unreachable: 0, failed: 1, skipped: 0 });
+    TemplateModel.incrementRuns(tmpl.id, 'failed');
+    return;
+  }
 
   const slugName = (tmpl.name || 'resource').toLowerCase().replace(/[^a-z0-9]+/g, '_');
 
@@ -1178,6 +1217,8 @@ async function executePowerShellWinRM(taskId, tmpl, inventory, inventoryContent,
   let rawGitUrl = tmpl.gitUrl || '';
   let repoName = tmpl.repositoryName || 'PowerShell Git Repository';
   let branch = tmpl.branch || 'main';
+  let repositorySourceType = 'git';
+  let repositoryCredential = null;
 
   if (tmpl.repositoryId) {
     try {
@@ -1186,6 +1227,8 @@ async function executePowerShellWinRM(taskId, tmpl, inventory, inventoryContent,
         repoName = repo.name || repoName;
         rawGitUrl = repo.gitUrl || rawGitUrl;
         branch = repo.branch || branch;
+        repositorySourceType = repo.sourceType || 'git';
+        repositoryCredential = getRepositoryCredential(repo);
       }
     } catch (_) {}
   }
@@ -1196,22 +1239,28 @@ async function executePowerShellWinRM(taskId, tmpl, inventory, inventoryContent,
 
   // Git Clone
   if (targetGitUrl) {
-    pushLog(`TASK [Retrieve PowerShell Script from Git: ${repoName}] ***`, 'info');
-    pushLog(`$ git clone --depth 1 -b ${targetBranch} ${targetGitUrl} <workspace>`, 'info');
+    pushLog(`TASK [Retrieve PowerShell Script from ${repositorySourceType === 'http' ? 'HTTP' : 'Git'}: ${repoName}] ***`, 'info');
+    if (repositorySourceType === 'http') {
+      pushLog(`$ wget <HTTP file URL> -O ${path.basename(scriptName)}`, 'info');
+    } else {
+      pushLog(`$ git clone --depth 1 -b ${targetBranch} ${sanitizeGitUrl(targetGitUrl)} <workspace>`, 'info');
+    }
     const repositoryWorkspace = path.join(taskWorkspace, 'repository');
     fs.rmSync(repositoryWorkspace, { recursive: true, force: true });
 
-    await new Promise((resolve) => {
-      const cmd = `git clone --depth 1 -b ${JSON.stringify(targetBranch)} ${JSON.stringify(targetGitUrl)} ${JSON.stringify(repositoryWorkspace)}`;
-      exec(cmd, (error, stdout) => {
-        if (error) {
-          pushLog(`[Git Cache] ${error.message} - Using existing workspace script cache`, 'changed');
-        } else {
-          pushLog(`ok: [localhost] => Cloned ${repoName} (${targetBranch}) successfully.`, 'ok');
-        }
-        resolve();
+    try {
+      await retrieveRepositorySource({
+        sourceType: repositorySourceType,
+        url: targetGitUrl,
+        branch: targetBranch,
+        destination: repositoryWorkspace,
+        credential: repositoryCredential,
+        fileName: scriptName
       });
-    });
+      pushLog(`ok: [localhost] => Retrieved ${repoName} ${repositorySourceType === 'http' ? 'HTTP file' : `(${targetBranch})`} successfully.`, 'ok');
+    } catch (error) {
+      pushLog(`[Git Cache] ${error.message} - Using existing workspace script cache`, 'changed');
+    }
   }
 
   // Find or create the target .ps1 script

@@ -15,6 +15,7 @@ export const RepositoryModel = {
   create: (data) => {
     const id = `repo-${Date.now()}`;
     const name = data.name;
+    const sourceType = data.sourceType === 'http' ? 'http' : 'git';
     const gitUrl = data.gitUrl;
     const branch = data.branch || 'main';
     const credentialId = data.credentialId || null;
@@ -24,11 +25,11 @@ export const RepositoryModel = {
     const now = new Date().toISOString();
 
     const stmt = db.prepare(`
-      INSERT INTO repositories (id, name, gitUrl, branch, credentialId, lastSync, status, playbooks, createdAt, updatedAt)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO repositories (id, name, sourceType, gitUrl, branch, credentialId, lastSync, status, playbooks, createdAt, updatedAt)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
-    stmt.run(id, name, gitUrl, branch, credentialId, lastSync, status, playbooks, now, now);
+    stmt.run(id, name, sourceType, gitUrl, branch, credentialId, lastSync, status, playbooks, now, now);
 
     console.log('[repo:model] Inserted repository id=', id);
     const inserted = RepositoryModel.findById(id);
@@ -41,6 +42,7 @@ export const RepositoryModel = {
     const values = [];
 
     if (data.name) { fields.push('name = ?'); values.push(data.name); }
+    if (data.sourceType) { fields.push('sourceType = ?'); values.push(data.sourceType === 'http' ? 'http' : 'git'); }
     if (data.gitUrl) { fields.push('gitUrl = ?'); values.push(data.gitUrl); }
     if (data.branch) { fields.push('branch = ?'); values.push(data.branch); }
     if (data.credentialId !== undefined) { fields.push('credentialId = ?'); values.push(data.credentialId); }

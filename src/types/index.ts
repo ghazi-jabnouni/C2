@@ -2,17 +2,18 @@ export interface Repository {
   id: string;
   name: string;
   gitUrl: string;
+  sourceType: 'git' | 'http';
   branch: string;
   credentialId?: string | null;
   lastSync: string;
-  status: 'synced' | 'syncing' | 'error';
+  status: 'synced' | 'syncing' | 'error' | 'not-synced';
   playbooks: string[];
 }
 
 export interface Credential {
   id: string;
   name: string;
-  type: 'ssh_key' | 'vault_password' | 'cloud_token' | 'password' | 'microsoft' | 'token' | 'active_directory';
+  type: 'ssh_key' | 'vault_password' | 'cloud_token' | 'password' | 'microsoft' | 'token' | 'git_token' | 'git_password' | 'active_directory';
   username: string;
   sshKey?: string;
   vaultPassword?: string;
